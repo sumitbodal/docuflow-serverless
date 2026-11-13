@@ -62,22 +62,27 @@ def lambda_handler(event, context):
     if ext not in ALLOWED_EXTENSIONS:
         raise ValueError(f"Unsupported file format '{ext}'. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}")
 
-    # Read S3 object to compute real cryptographic hash and byte size - Fail closed
+    # Check S3 object metadata first to enforce size limits BEFORE downloading full bytes
     try:
         head_res = s3_client.head_object(Bucket=s3_bucket, Key=s3_key)
-        content_len = head_res.get('ContentLength', 0)
+        reported_size = head_res.get('ContentLength', 0)
+    except Exception as e:
+        raise FileNotFoundError(f"S3 document object s3://{s3_bucket}/{s3_key} could not be retrieved: {e}")
+
+    if reported_size <= 0:
+        raise ValueError(f"Document file s3://{s3_bucket}/{s3_key} is empty (0 bytes)")
+
+    if reported_size > MAX_FILE_SIZE_BYTES:
+        raise ValueError(f"File size {reported_size} exceeds maximum limit of {MAX_FILE_SIZE_BYTES} bytes")
+
+    # Read S3 object bytes to compute cryptographic SHA-256 digest
+    try:
         s3_obj = s3_client.get_object(Bucket=s3_bucket, Key=s3_key)
         content_bytes = s3_obj['Body'].read()
         file_sha256 = hashlib.sha256(content_bytes).hexdigest()
         file_size = len(content_bytes)
     except Exception as e:
-        raise FileNotFoundError(f"S3 document object s3://{s3_bucket}/{s3_key} could not be retrieved: {e}")
-
-    if file_size <= 0:
-        raise ValueError(f"Document file s3://{s3_bucket}/{s3_key} is empty (0 bytes)")
-
-    if file_size > MAX_FILE_SIZE_BYTES:
-        raise ValueError(f"File size {file_size} exceeds maximum limit of {MAX_FILE_SIZE_BYTES} bytes")
+        raise FileNotFoundError(f"Failed to read S3 document bytes for s3://{s3_bucket}/{s3_key}: {e}")
 
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     security_info = {

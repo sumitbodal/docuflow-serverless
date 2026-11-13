@@ -83,6 +83,24 @@ class TestRiskScorer(unittest.TestCase):
             self.assertEqual(result["risk"]["level"], "HIGH")
             self.assertEqual(result["risk"]["recommendation"], "FLAG_FOR_MANUAL_REVIEW")
 
+    def test_model_unverified_vendor_claims_trust_treated_as_untrusted(self):
+        """Verifies risk scorer treats vendor as untrusted if not verified in server-side registry."""
+        event = {
+            "document_id": "doc-fake-trust",
+            "extracted_data": {
+                "vendor": "Unverified Vendor claiming trust",
+                "vendor_trusted": True,
+                "vendor_registry_match": False,  # Server-side check failed
+                "grand_total": 1200.0
+            },
+            "security_scan": {"format_whitelisted": True, "size_within_limits": True}
+        }
+        with patch.object(risk_scorer_app, 'table'):
+            result = risk_scorer_app.lambda_handler(event, None)
+            # Must be flagged as untrusted (+45 risk score)
+            self.assertIn("Untrusted or unregistered offshore entity", " ".join(result["risk"]["factors"]))
+            self.assertGreaterEqual(result["risk"]["score"], 50)
+
     def test_review_handler_waitForTaskToken(self):
         event = {
             "document_id": "doc-test-3333",

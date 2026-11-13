@@ -184,6 +184,41 @@ class TestExtractor(unittest.TestCase):
                     self.assertFalse(data["vendor_trusted"])
                     self.assertEqual(data["subtotal"], 89500.00)
 
+    def test_bedrock_unregistered_vendor_cannot_claim_trust(self):
+        """Verifies server-side registry overrides model: unknown vendor claiming trust is marked untrusted."""
+        event = {
+            "document_id": "doc-shady-vendor",
+            "filename": "fake_invoice.pdf",
+            "s3_bucket": "test-bucket",
+            "s3_key": "uploads/doc-shady-vendor/fake_invoice.pdf"
+        }
+        bedrock_mock = {
+            "output": {
+                "message": {
+                    "content": [
+                        {
+                            "text": json.dumps({
+                                "invoice_number": "INV-SHADY-001",
+                                "vendor": "Shady Shell Co Offshore",
+                                "vendor_trusted": True,  # Model claims trust, but server-side registry must reject it
+                                "grand_total": 450.00
+                            })
+                        }
+                    ]
+                }
+            }
+        }
+        with patch.object(extractor_app, 'table'):
+            with patch.object(extractor_app, 's3_client') as mock_s3:
+                with patch.object(extractor_app, 'bedrock_runtime') as mock_bedrock:
+                    mock_s3.get_object.return_value = {"Body": BytesIO(b"%PDF-1.4 Fake Invoice Bytes")}
+                    mock_bedrock.converse.return_value = bedrock_mock
+                    res = extractor_app.lambda_handler(event, None)
+                    data = res["extracted_data"]
+                    # Server-side registry must override the model's claim
+                    self.assertFalse(data["vendor_trusted"])
+                    self.assertFalse(data["vendor_registry_match"])
+
     def test_binary_image_without_bedrock_fails_closed_without_inventing_data(self):
         """Verifies that when Bedrock is offline, image documents fail closed without inventing fake amounts."""
         binary_image_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRbinary_mock_bytes"

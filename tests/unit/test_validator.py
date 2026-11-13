@@ -61,6 +61,22 @@ class TestValidator(unittest.TestCase):
             validator_app.lambda_handler(event, None)
         self.assertIn("Missing required S3 coordinates", str(ctx.exception))
 
+    def test_oversized_s3_file_fails_closed_before_download(self):
+        """Verifies validator checks head_object size before reading full payload, rejecting >10MB files."""
+        event = {
+            "document_id": "test-uuid-oversized",
+            "s3_bucket": "test-bucket",
+            "s3_key": "uploads/test-uuid-oversized/huge.pdf",
+            "filename": "huge.pdf"
+        }
+        with patch.object(validator_app, 's3_client') as mock_s3:
+            mock_s3.head_object.return_value = {"ContentLength": 15 * 1024 * 1024} # 15MB
+            with self.assertRaises(ValueError) as ctx:
+                validator_app.lambda_handler(event, None)
+            self.assertIn("exceeds maximum limit", str(ctx.exception))
+            # Critical: must NOT download full body if head_object reported oversized
+            mock_s3.get_object.assert_not_called()
+
     def test_missing_s3_object_fails_closed(self):
         """Verifies fail-closed behavior when S3 object cannot be found."""
         event = {

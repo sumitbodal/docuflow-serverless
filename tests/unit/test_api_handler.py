@@ -186,6 +186,31 @@ class TestApiHandler(unittest.TestCase):
                     self.assertEqual(res["statusCode"], 400)
                     mock_sfn.start_execution.assert_not_called()
 
+    def test_process_document_fails_closed_when_file_exceeds_size_limit(self):
+        """Verifies process endpoint rejects uploads exceeding 10MB limit before starting Step Functions."""
+        event = {
+            "routeKey": "POST /api/documents/doc-huge/process",
+            "pathParameters": {"id": "doc-huge"},
+            "requestContext": {"http": {"method": "POST"}}
+        }
+        with patch.object(api_handler_app, 'table') as mock_table:
+            mock_table.get_item.return_value = {
+                "Item": {
+                    "document_id": "doc-huge",
+                    "filename": "huge.pdf",
+                    "s3_key": "uploads/doc-huge/huge.pdf",
+                    "s3_bucket": "test-bucket"
+                }
+            }
+            with patch.object(api_handler_app, 's3_client') as mock_s3:
+                with patch.object(api_handler_app, 'sfn_client') as mock_sfn:
+                    mock_s3.head_object.return_value = {"ContentLength": 20 * 1024 * 1024} # 20MB
+                    res = api_handler_app.lambda_handler(event, None)
+                    self.assertEqual(res["statusCode"], 400)
+                    data = json.loads(res["body"])
+                    self.assertIn("exceeds maximum limit", data["error"])
+                    mock_sfn.start_execution.assert_not_called()
+
     def test_approve_document_resumes_step_functions_via_task_token(self):
         event = {
             "routeKey": "POST /api/documents/doc-12345/approve",

@@ -37,7 +37,15 @@ def calculate_anomaly_risk(extracted_data: dict, security_scan: dict = None) -> 
     risk_factors = []
 
     vendor = extracted_data.get("vendor", "")
-    vendor_trusted = extracted_data.get("vendor_trusted", True)
+    # Fail closed on trust: model cannot grant trust unilaterally.
+    # Require server-side registry match or verification against known trusted enterprise registry.
+    trusted_registry = {"amazon web services", "aws", "github", "datadog", "microsoft"}
+    is_known_trusted = any(t in vendor.lower() for t in trusted_registry)
+
+    if "vendor_registry_match" in extracted_data:
+        vendor_trusted = bool(extracted_data.get("vendor_trusted", False) and extracted_data.get("vendor_registry_match", False))
+    else:
+        vendor_trusted = bool(extracted_data.get("vendor_trusted", False) and is_known_trusted)
     grand_total = float(extracted_data.get("grand_total", 0.0))
 
     if extracted_data.get("extraction_status") == "EXTRACTION_FAILED":

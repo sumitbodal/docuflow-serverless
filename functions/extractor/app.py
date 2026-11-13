@@ -150,6 +150,24 @@ def extract_with_bedrock(content_bytes: bytes, filename: str, document_id: str):
             if "tax_amount" in parsed: parsed["tax_amount"] = round(float(parsed["tax_amount"]), 2)
             if "grand_total" in parsed: parsed["grand_total"] = round(float(parsed["grand_total"]), 2)
 
+            # Enforce server-side enterprise vendor verification
+            # Model response is untrusted: verify vendor against server-side registry
+            vendor_raw = str(parsed.get("vendor", "")).strip()
+            verified_vendor = None
+            for reg_v in SAMPLE_VENDORS:
+                if reg_v["name"].lower() in vendor_raw.lower() or reg_v["domain"].lower() in vendor_raw.lower():
+                    verified_vendor = reg_v
+                    break
+
+            if verified_vendor:
+                parsed["vendor_trusted"] = bool(verified_vendor.get("trusted", False))
+                parsed["vendor_registry_match"] = True
+                parsed["tax_id"] = verified_vendor.get("tax_id", parsed.get("tax_id"))
+            else:
+                # Untrusted / unregistered vendor: never allow model to grant trust unilaterally
+                parsed["vendor_trusted"] = False
+                parsed["vendor_registry_match"] = False
+
             if subsegment:
                 try:
                     subsegment.put_annotation("vendor_trusted", bool(parsed.get("vendor_trusted", True)))
@@ -307,6 +325,7 @@ def parse_document_content_rules(content_bytes: bytes, filename: str, document_i
         "vendor": matched_vendor["name"],
         "tax_id": matched_vendor["tax_id"],
         "vendor_trusted": matched_vendor["trusted"],
+        "vendor_registry_match": matched_vendor.get("trusted", False),
         "vendor_domain": matched_vendor["domain"],
         "currency": "USD",
         "subtotal": round(extracted_amount, 2),

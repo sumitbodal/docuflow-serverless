@@ -440,9 +440,12 @@ window.openDetailsModal = function(docId) {
       </ul>
     </div>
     <div style="margin-bottom: 0.5rem;">
-      <strong>Security &amp; Integrity Clearance:</strong>
+      <strong>Security &amp; Checksum Scope:</strong>
       <div style="font-size:0.8rem; color:#94a3b8;">
-        SHA256: <code>${doc.security_scan?.sha256 || 'N/A'}</code> | Format Whitelist: ✅ Passed | Cryptographic Integrity: ✅ Verified
+        SHA-256 Digest: <code>${doc.security_scan?.sha256 || 'N/A'}</code> (computed) | Format Whitelist: ✅ Passed | File Size: ${doc.security_scan?.file_size_bytes ? Math.round(doc.security_scan.file_size_bytes/1024) + ' KB' : 'N/A'} (within 10MB limit)
+      </div>
+      <div style="font-size:0.75rem; color:#94a3b8; font-style: italic; margin-top: 0.2rem;">
+        Note: SHA-256 is a computed payload digest (no trusted prior-hash comparison or malware scanning).
       </div>
     </div>
     <div style="margin-bottom: 0.5rem; margin-top: 0.75rem;">

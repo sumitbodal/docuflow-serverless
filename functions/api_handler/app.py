@@ -35,6 +35,8 @@ except ImportError:
     except ImportError:
         pass
 
+MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024 # 10 MB
+
 def build_response(status_code: int, body: dict):
     return {
         "statusCode": status_code,
@@ -139,13 +141,26 @@ def handle_process_document(event, document_id):
         s3_bucket = doc.get("s3_bucket", DOCS_BUCKET_NAME)
         filename = doc.get("filename", "document.pdf")
 
-    # 2. FAIL CLOSED: Verify object exists on S3 before triggering Step Functions
+    # 2. FAIL CLOSED: Verify object exists on S3 and enforce size limit before triggering Step Functions
     try:
-        s3_client.head_object(Bucket=s3_bucket, Key=s3_key)
+        head_res = s3_client.head_object(Bucket=s3_bucket, Key=s3_key)
+        reported_size = head_res.get('ContentLength', 0)
         object_exists = True
     except Exception as e:
         return build_response(400, {
             "error": f"Document file not found in S3 bucket '{s3_bucket}'. Please upload bytes before triggering processing.",
+            "s3_key": s3_key
+        })
+
+    if reported_size <= 0:
+        return build_response(400, {
+            "error": f"Uploaded document file in '{s3_bucket}' is empty (0 bytes).",
+            "s3_key": s3_key
+        })
+
+    if reported_size > MAX_UPLOAD_SIZE_BYTES:
+        return build_response(400, {
+            "error": f"Uploaded document size ({reported_size} bytes) exceeds maximum limit of {MAX_UPLOAD_SIZE_BYTES} bytes (10MB).",
             "s3_key": s3_key
         })
 
