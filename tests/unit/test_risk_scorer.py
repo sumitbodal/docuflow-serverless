@@ -94,6 +94,18 @@ class TestRiskScorer(unittest.TestCase):
             self.assertEqual(res["statusCode"], 200)
             mock_table.update_item.assert_called_once()
 
+    def test_review_handler_fails_closed_when_dynamo_errors(self):
+        """Verifies review_handler raises exception if task_token persistence fails."""
+        event = {
+            "document_id": "doc-test-fail-save",
+            "task_token": "UnsavedTaskToken==",
+            "risk": {"score": 85, "level": "HIGH"}
+        }
+        with patch.object(risk_scorer_app, 'table') as mock_table:
+            mock_table.update_item.side_effect = Exception("DynamoDBProvisionedThroughputExceeded")
+            with self.assertRaises(Exception):
+                risk_scorer_app.review_handler(event, None)
+
     def test_notifier_handler(self):
         event = {
             "document_id": "doc-test-4444",

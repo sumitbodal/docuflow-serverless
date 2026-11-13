@@ -181,6 +181,17 @@ def handle_process_document(event, document_id):
         "message": "Step Functions state machine triggered."
     })
 
+def sanitize_document_record(item: dict) -> dict:
+    """
+    Strips internal execution and security-sensitive tokens (such as task_token)
+    before returning document details to public API callers.
+    """
+    if not isinstance(item, dict):
+        return item
+    sanitized = dict(item)
+    sanitized.pop("task_token", None)
+    return sanitized
+
 def handle_list_documents(event):
     items = []
     try:
@@ -198,7 +209,8 @@ def handle_list_documents(event):
         except Exception:
             items = []
 
-    return build_response(200, {"count": len(items), "documents": items})
+    sanitized_items = [sanitize_document_record(i) for i in items]
+    return build_response(200, {"count": len(sanitized_items), "documents": sanitized_items})
 
 def handle_get_document(event, document_id):
     try:
@@ -206,7 +218,7 @@ def handle_get_document(event, document_id):
         item = res.get("Item")
         if not item:
             return build_response(404, {"error": "Document not found"})
-        return build_response(200, item)
+        return build_response(200, sanitize_document_record(item))
     except Exception as e:
         return build_response(500, {"error": str(e)})
 

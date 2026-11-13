@@ -59,11 +59,11 @@ def calculate_anomaly_risk(extracted_data: dict, security_scan: dict = None) -> 
         risk_factors.append(f"Moderate value invoice (${grand_total:,.2f}) (+15)")
 
     if security_scan:
-        if not security_scan.get("integrity_verified", True) or not security_scan.get("format_whitelisted", True):
+        if not security_scan.get("format_whitelisted", True) or not security_scan.get("size_within_limits", True):
             risk_score += 40
-            risk_factors.append("Security validation flagged integrity or format irregularities (+40)")
+            risk_factors.append("Security validation flagged format or file-size irregularities (+40)")
         else:
-            risk_factors.append("Cryptographic SHA-256 byte integrity and format whitelisted")
+            risk_factors.append("Cryptographic SHA-256 digest computed and format whitelisted")
 
     risk_score = min(100, max(0, risk_score))
 
@@ -171,20 +171,22 @@ def review_handler(event, context):
     risk = event.get("risk", {})
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-    try:
-        table.update_item(
-            Key={"PK": f"DOC#{document_id}", "SK": "METADATA"},
-            UpdateExpression="SET #st = :st, task_token = :tok, updated_at = :now, review_requested_at = :now",
-            ExpressionAttributeNames={"#st": "status"},
-            ExpressionAttributeValues={
-                ":st": "PENDING_APPROVAL",
-                ":tok": task_token,
-                ":now": now_iso
-            }
-        )
-        print(f"Stored task token for document {document_id}; Step Functions paused.")
-    except Exception as e:
-        print(f"DynamoDB update error in review_handler: {e}")
+    if not document_id or not task_token:
+        raise ValueError(f"review_handler requires document_id and task_token; received document_id={document_id}")
+
+    # Fail closed on DynamoDB token persistence:
+    # If the token is not durably recorded, the Step Functions execution cannot be resumed via API.
+    table.update_item(
+        Key={"PK": f"DOC#{document_id}", "SK": "METADATA"},
+        UpdateExpression="SET #st = :st, task_token = :tok, updated_at = :now, review_requested_at = :now",
+        ExpressionAttributeNames={"#st": "status"},
+        ExpressionAttributeValues={
+            ":st": "PENDING_APPROVAL",
+            ":tok": task_token,
+            ":now": now_iso
+        }
+    )
+    print(f"Stored task token for document {document_id}; Step Functions paused.")
 
     # Also notify administrators via SNS topic if configured
     sns_topic_arn = os.environ.get("SNS_TOPIC_ARN")

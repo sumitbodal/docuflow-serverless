@@ -182,5 +182,47 @@ class TestApiHandler(unittest.TestCase):
             data = json.loads(res["body"])
             self.assertIn("not found", data["error"])
 
+    def test_get_and_list_documents_sanitize_sensitive_task_token(self):
+        """Verifies task_token is stripped from API responses to prevent unauthenticated approval spoofing."""
+        event_get = {
+            "routeKey": "GET /api/documents/doc-sensitive",
+            "pathParameters": {"id": "doc-sensitive"},
+            "requestContext": {"http": {"method": "GET"}}
+        }
+        with patch.object(api_handler_app, 'table') as mock_table:
+            mock_table.get_item.return_value = {
+                "Item": {
+                    "document_id": "doc-sensitive",
+                    "status": "PENDING_APPROVAL",
+                    "task_token": "SecretSfnTaskToken123==",
+                    "filename": "invoice.pdf"
+                }
+            }
+            res = api_handler_app.lambda_handler(event_get, None)
+            self.assertEqual(res["statusCode"], 200)
+            data = json.loads(res["body"])
+            self.assertEqual(data["document_id"], "doc-sensitive")
+            self.assertNotIn("task_token", data)
+
+        event_list = {
+            "routeKey": "GET /api/documents",
+            "requestContext": {"http": {"method": "GET"}}
+        }
+        with patch.object(api_handler_app, 'table') as mock_table:
+            mock_table.query.return_value = {
+                "Items": [
+                    {
+                        "document_id": "doc-sensitive",
+                        "status": "PENDING_APPROVAL",
+                        "task_token": "SecretSfnTaskToken123=="
+                    }
+                ]
+            }
+            res = api_handler_app.lambda_handler(event_list, None)
+            self.assertEqual(res["statusCode"], 200)
+            data = json.loads(res["body"])
+            self.assertEqual(len(data["documents"]), 1)
+            self.assertNotIn("task_token", data["documents"][0])
+
 if __name__ == '__main__':
     unittest.main()

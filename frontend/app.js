@@ -24,7 +24,7 @@ let localDocuments = [
     security_scan: {
       status: "VALIDATED",
       sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      integrity_verified: true,
+      sha256_computed: true,
       format_whitelisted: true,
       size_within_limits: true
     },
@@ -56,7 +56,7 @@ let localDocuments = [
     security_scan: {
       status: "VALIDATED",
       sha256: "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
-      integrity_verified: true,
+      sha256_computed: true,
       format_whitelisted: true,
       size_within_limits: true
     },
@@ -314,7 +314,7 @@ async function executePipelineVisualizer(docId, filename) {
     security_scan: {
       status: "VALIDATED",
       sha256: `sha256_${docId.substring(0, 16)}`,
-      integrity_verified: true,
+      sha256_computed: true,
       format_whitelisted: true,
       size_within_limits: true
     },

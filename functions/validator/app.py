@@ -85,10 +85,10 @@ def lambda_handler(event, context):
         "file_size_bytes": int(file_size),
         "extension": ext,
         "sha256": file_sha256,
-        "integrity_verified": True,
+        "sha256_computed": True,
         "format_whitelisted": True,
         "size_within_limits": True,
-        "check_scope": "Cryptographic SHA-256 Checksum, Size Bounds & Extension Whitelist",
+        "check_scope": "Cryptographic SHA-256 Digest Computation, Size Bounds & Extension Whitelist (No Anti-Malware / Prior Hash Matching)",
         "validated_at": now_iso
     }
 
@@ -97,7 +97,7 @@ def lambda_handler(event, context):
             curr_sub = xray_recorder.current_subsegment() or xray_recorder.current_segment()
             if curr_sub:
                 curr_sub.put_annotation("document_id", str(document_id))
-                curr_sub.put_annotation("integrity_verified", True)
+                curr_sub.put_annotation("sha256_computed", True)
                 curr_sub.put_annotation("extension", str(ext))
                 curr_sub.put_metadata("file_size_bytes", int(file_size))
                 curr_sub.put_metadata("sha256", str(file_sha256))

@@ -40,9 +40,10 @@ class TestValidator(unittest.TestCase):
                 self.assertEqual(sec["status"], "VALIDATED")
                 self.assertEqual(sec["file_size_bytes"], len(b"%PDF-1.4 Mock Invoice Content"))
                 self.assertEqual(sec["extension"], ".pdf")
-                self.assertTrue(sec["integrity_verified"])
+                self.assertTrue(sec["sha256_computed"])
                 self.assertTrue(sec["format_whitelisted"])
                 self.assertTrue(sec["size_within_limits"])
+                self.assertNotIn("integrity_verified", sec)
                 self.assertNotIn("compliance_cleared", sec)
                 self.assertIn("sha256", sec)
                 # SHA256 of b"%PDF-1.4 Mock Invoice Content"
