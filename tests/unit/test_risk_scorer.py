@@ -37,7 +37,8 @@ class TestRiskScorer(unittest.TestCase):
                     "document_id": "doc-parallel-123",
                     "security_scan": {
                         "status": "VALIDATED",
-                        "compliance_cleared": True
+                        "integrity_verified": True,
+                        "format_whitelisted": True
                     }
                 }
             ]
@@ -58,13 +59,29 @@ class TestRiskScorer(unittest.TestCase):
                 "vendor_trusted": False,
                 "grand_total": 85000.00
             },
-            "security_scan": {"compliance_cleared": True}
+            "security_scan": {"integrity_verified": True, "format_whitelisted": True}
         }
         with patch.object(risk_scorer_app, 'table'):
             result = risk_scorer_app.lambda_handler(event, None)
             self.assertEqual(result["risk"]["level"], "HIGH")
             self.assertEqual(result["risk"]["recommendation"], "FLAG_FOR_MANUAL_REVIEW")
             self.assertGreaterEqual(result["risk"]["score"], 70)
+
+    def test_extraction_failed_elevates_risk(self):
+        event = {
+            "document_id": "doc-failed-extract",
+            "extracted_data": {
+                "vendor": "Unextracted (Binary Document)",
+                "vendor_trusted": False,
+                "grand_total": 0.0,
+                "extraction_status": "EXTRACTION_FAILED"
+            },
+            "security_scan": {"integrity_verified": True, "format_whitelisted": True}
+        }
+        with patch.object(risk_scorer_app, 'table'):
+            result = risk_scorer_app.lambda_handler(event, None)
+            self.assertEqual(result["risk"]["level"], "HIGH")
+            self.assertEqual(result["risk"]["recommendation"], "FLAG_FOR_MANUAL_REVIEW")
 
     def test_review_handler_waitForTaskToken(self):
         event = {

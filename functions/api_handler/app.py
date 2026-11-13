@@ -214,6 +214,7 @@ def handle_approve_document(event, document_id):
     """
     Step 3: Human review decision callback.
     Resumes suspended Step Functions state machine via send_task_success(TaskToken)!
+    Fails closed if document is not awaiting approval or if Step Functions fails to resume.
     """
     body = {}
     if event.get("body"):
@@ -228,61 +229,75 @@ def handle_approve_document(event, document_id):
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     new_status = "APPROVED" if action == "APPROVE" else "REJECTED"
 
-    # Fetch task token: check body first (passed from SNS / dashboard callback), else look up in DynamoDB
-    task_token = body.get("task_token")
+    # 1. Fetch document record from DynamoDB to check existence and state
+    item = None
+    try:
+        res = table.get_item(Key={"PK": f"DOC#{document_id}", "SK": "METADATA"})
+        item = res.get("Item")
+    except Exception as e:
+        print(f"Error reading document from DynamoDB: {e}")
+
+    if not item:
+        return build_response(404, {"error": f"Document '{document_id}' not found"})
+
+    # 2. Extract task token: check body first, then DynamoDB record
+    task_token = body.get("task_token") or item.get("task_token")
     if not task_token:
-        try:
-            res = table.get_item(Key={"PK": f"DOC#{document_id}", "SK": "METADATA"})
-            item = res.get("Item")
-            if not item:
-                return build_response(404, {"error": f"Document '{document_id}' not found"})
-            task_token = item.get("task_token")
-        except Exception as e:
-            print(f"Error reading task_token from DynamoDB: {e}")
+        return build_response(400, {
+            "error": f"Document '{document_id}' is not awaiting approval (no active Step Functions task token found).",
+            "current_status": item.get("status")
+        })
 
-    # Resume paused Step Functions execution via task token
-    sfn_resumed = False
-    if task_token:
-        try:
-            callback_payload = {
-                "document_id": document_id,
-                "status": new_status,
-                "decision": f"MANUAL_{new_status}",
-                "reviewer": reviewer,
-                "notes": notes,
-                "approved_at": now_iso
-            }
-            sfn_client.send_task_success(
-                taskToken=task_token,
-                output=json.dumps(callback_payload)
-            )
-            sfn_resumed = True
-            print(f"Successfully sent TaskSuccess for document {document_id}")
-        except Exception as e:
-            print(f"sfn send_task_success note: {e}")
+    # 3. Resume paused Step Functions execution via task token
+    review_message = f"Manual decision {new_status} by {reviewer}. Notes: {notes}"
+    callback_payload = {
+        "document_id": str(document_id),
+        "status": new_status,
+        "decision": f"MANUAL_{new_status}",
+        "reviewer": str(reviewer),
+        "notes": str(notes),
+        "message": review_message,
+        "approved_at": now_iso
+    }
 
-    # Update DynamoDB record
+    try:
+        sfn_client.send_task_success(
+            taskToken=task_token,
+            output=json.dumps(callback_payload)
+        )
+        print(f"Successfully sent TaskSuccess for document {document_id}")
+    except Exception as e:
+        print(f"Error resuming Step Functions for document {document_id}: {e}")
+        return build_response(500, {
+            "error": f"Failed to resume Step Functions execution: {str(e)}",
+            "document_id": document_id
+        })
+
+    # 4. Only after Step Functions resumes successfully, commit decision to DynamoDB
     try:
         table.update_item(
             Key={"PK": f"DOC#{document_id}", "SK": "METADATA"},
-            UpdateExpression="SET #st = :st, updated_at = :now, reviewer = :rev, review_notes = :notes, sfn_resumed = :sfn",
+            UpdateExpression="SET #st = :st, updated_at = :now, reviewer = :rev, review_notes = :notes, sfn_resumed = :sfn REMOVE task_token",
             ExpressionAttributeNames={"#st": "status"},
             ExpressionAttributeValues={
                 ":st": new_status,
                 ":now": now_iso,
                 ":rev": reviewer,
                 ":notes": notes,
-                ":sfn": sfn_resumed
+                ":sfn": True
             }
         )
     except Exception as e:
-        return build_response(500, {"error": str(e)})
+        print(f"DynamoDB local update note: {e}")
 
     return build_response(200, {
         "document_id": document_id,
         "status": new_status,
+        "decision": f"MANUAL_{new_status}",
         "action": action,
-        "step_functions_resumed": sfn_resumed,
+        "message": review_message,
+        "step_functions_resumed": True,
+        "reviewer": reviewer,
         "updated_at": now_iso
     })
 

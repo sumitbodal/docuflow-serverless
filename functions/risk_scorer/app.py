@@ -40,6 +40,10 @@ def calculate_anomaly_risk(extracted_data: dict, security_scan: dict = None) -> 
     vendor_trusted = extracted_data.get("vendor_trusted", True)
     grand_total = float(extracted_data.get("grand_total", 0.0))
 
+    if extracted_data.get("extraction_status") == "EXTRACTION_FAILED":
+        risk_score += 60
+        risk_factors.append("Automated document extraction failed or unavailable - manual review required (+60)")
+
     if not vendor_trusted:
         risk_score += 45
         risk_factors.append(f"Untrusted or unregistered offshore entity: '{vendor}' (+45)")
@@ -54,9 +58,12 @@ def calculate_anomaly_risk(extracted_data: dict, security_scan: dict = None) -> 
         risk_score += 15
         risk_factors.append(f"Moderate value invoice (${grand_total:,.2f}) (+15)")
 
-    if security_scan and not security_scan.get("compliance_cleared", True):
-        risk_score += 30
-        risk_factors.append("Security scan flagged compliance or integrity irregularity (+30)")
+    if security_scan:
+        if not security_scan.get("integrity_verified", True) or not security_scan.get("format_whitelisted", True):
+            risk_score += 40
+            risk_factors.append("Security validation flagged integrity or format irregularities (+40)")
+        else:
+            risk_factors.append("Cryptographic SHA-256 byte integrity and format whitelisted")
 
     risk_score = min(100, max(0, risk_score))
 

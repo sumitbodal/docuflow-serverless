@@ -137,12 +137,21 @@ Even without active cloud credentials, you can immediately test DocuFlow AI:
    - 🐙 **GitHub Enterprise ($399.00)**: Demonstrates verified enterprise entity extraction.
    - ⚠️ **Offshore Shadow Vendor ($89,500.00)**: Demonstrates anomaly detection (Score 92/100) halting at Step Functions `waitForTaskToken` state awaiting human approval.
 3. Inspect live JSON payloads and risk factors.
-4. Click **Approve (sendTaskSuccess)** or **Reject (sendTaskFailure)** to simulate administrative callback and resume the Step Functions pipeline in real-time!
+4. Click **Approve (Manual Review)** or **Reject (Manual Review)** to simulate the human reviewer callback (passing the decision payload via `sendTaskSuccess`) and resume the Step Functions pipeline in real-time!
+
+---
+
+## 🔒 Security & Production Hardening
+- **Demonstration Scope**: The repository is configured out-of-the-box for evaluation with open CORS and an S3 website bucket so judges and reviewers can test without provisioning directory credentials.
+- **Enterprise Hardening Path**: For enterprise production environments handling sensitive financial records:
+  1. **API Gateway Auth**: Add an Amazon Cognito User Pool Authorizer or AWS IAM Authorizer under `Auth: DefaultAuthorizer` in `DocuFlowHttpApi`.
+  2. **Private Storage**: Remove public website configuration on `DocuFlowFrontendBucket` and front with Amazon CloudFront using Origin Access Control (OAC).
+  3. **WAF & Rate Limiting**: Attach AWS WAF to the API Gateway HTTP API to protect endpoints against brute force and DDoS.
 
 ---
 
 ## 🧪 Automated Testing
-Run the comprehensive 22-test suite verifying all microservices, multi-modal Converse API parsing, fail-closed S3 guards, parallel inputs, task tokens, and decimal serialization:
+Run the comprehensive 28-test suite verifying all microservices, multi-modal Converse API parsing, fail-closed S3 guards, parallel inputs, task tokens, error propagation, and decimal serialization:
 ```bash
 python -m unittest discover -s tests/unit -p "test_*.py" -v
 ```

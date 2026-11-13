@@ -20,7 +20,7 @@ dynamodb = boto3.resource('dynamodb')
 TABLE_NAME = os.environ.get('TABLE_NAME', 'DocuFlowRecords')
 table = dynamodb.Table(TABLE_NAME)
 
-ALLOWED_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg', '.tiff', '.txt'}
+ALLOWED_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg'}
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 # 10 MB
 
 try:
@@ -40,10 +40,10 @@ except ImportError:
 
 def lambda_handler(event, context):
     """
-    Validator & Security Pre-Screen:
+    Validator:
     Runs concurrently in Step Functions Parallel state.
     Inspects S3 object metadata, computes SHA256 integrity hash,
-    and screens for malicious file anomalies.
+    validates file size boundaries, and checks format whitelist.
     """
     print("Validator received event:", json.dumps(event, default=str))
 
@@ -55,24 +55,26 @@ def lambda_handler(event, context):
     if not document_id:
         raise ValueError("Missing required field: document_id")
 
+    if not s3_bucket or not s3_key:
+        raise ValueError("Missing required S3 coordinates: 's3_bucket' and 's3_key' are required for integrity validation.")
+
     _, ext = os.path.splitext(filename.lower())
     if ext not in ALLOWED_EXTENSIONS:
-        raise ValueError(f"Unsupported file format '{ext}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}")
+        raise ValueError(f"Unsupported file format '{ext}'. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}")
 
-    file_size = 102400
-    file_sha256 = hashlib.sha256(f"{document_id}-{filename}".encode('utf-8')).hexdigest()
+    # Read S3 object to compute real cryptographic hash and byte size - Fail closed
+    try:
+        head_res = s3_client.head_object(Bucket=s3_bucket, Key=s3_key)
+        content_len = head_res.get('ContentLength', 0)
+        s3_obj = s3_client.get_object(Bucket=s3_bucket, Key=s3_key)
+        content_bytes = s3_obj['Body'].read()
+        file_sha256 = hashlib.sha256(content_bytes).hexdigest()
+        file_size = len(content_bytes)
+    except Exception as e:
+        raise FileNotFoundError(f"S3 document object s3://{s3_bucket}/{s3_key} could not be retrieved: {e}")
 
-    # Read S3 object if available to compute real cryptographic hash and byte size - Fail closed
-    if s3_bucket and s3_key:
-        try:
-            head_res = s3_client.head_object(Bucket=s3_bucket, Key=s3_key)
-            file_size = head_res.get('ContentLength', file_size)
-            s3_obj = s3_client.get_object(Bucket=s3_bucket, Key=s3_key)
-            content_bytes = s3_obj['Body'].read()
-            file_sha256 = hashlib.sha256(content_bytes).hexdigest()
-            file_size = len(content_bytes)
-        except Exception as e:
-            raise FileNotFoundError(f"S3 document object s3://{s3_bucket}/{s3_key} could not be retrieved: {e}")
+    if file_size <= 0:
+        raise ValueError(f"Document file s3://{s3_bucket}/{s3_key} is empty (0 bytes)")
 
     if file_size > MAX_FILE_SIZE_BYTES:
         raise ValueError(f"File size {file_size} exceeds maximum limit of {MAX_FILE_SIZE_BYTES} bytes")
@@ -85,8 +87,8 @@ def lambda_handler(event, context):
         "sha256": file_sha256,
         "integrity_verified": True,
         "format_whitelisted": True,
-        "compliance_cleared": True,
-        "check_scope": "Cryptographic SHA-256 Integrity, Size Limits & Extension Whitelist",
+        "size_within_limits": True,
+        "check_scope": "Cryptographic SHA-256 Checksum, Size Bounds & Extension Whitelist",
         "validated_at": now_iso
     }
 
@@ -95,7 +97,7 @@ def lambda_handler(event, context):
             curr_sub = xray_recorder.current_subsegment() or xray_recorder.current_segment()
             if curr_sub:
                 curr_sub.put_annotation("document_id", str(document_id))
-                curr_sub.put_annotation("compliance_cleared", True)
+                curr_sub.put_annotation("integrity_verified", True)
                 curr_sub.put_annotation("extension", str(ext))
                 curr_sub.put_metadata("file_size_bytes", int(file_size))
                 curr_sub.put_metadata("sha256", str(file_sha256))

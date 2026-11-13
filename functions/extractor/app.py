@@ -173,12 +173,63 @@ def extract_with_bedrock(content_bytes: bytes, filename: str, document_id: str):
 def parse_document_content_rules(content_bytes: bytes, filename: str, document_id: str):
     """
     Deterministic rule-based fallback when Bedrock is offline or in local test environment.
+    Strictly parses verified text matches. Never invents default amounts or random vendors.
     """
+    _, ext = os.path.splitext(filename.lower())
+
+    # Images (.png, .jpg, .jpeg) cannot be decoded as text; they require Bedrock vision
+    if ext in [".png", ".jpg", ".jpeg"]:
+        return {
+            "invoice_number": None,
+            "vendor": "Unextracted (Image requires Bedrock Multi-Modal Vision)",
+            "tax_id": None,
+            "vendor_trusted": False,
+            "vendor_domain": None,
+            "currency": "USD",
+            "subtotal": 0.0,
+            "tax_rate": 0.0,
+            "tax_amount": 0.0,
+            "grand_total": 0.0,
+            "issue_date": None,
+            "due_date": None,
+            "line_items": [],
+            "extraction_confidence": 0.0,
+            "raw_byte_length": len(content_bytes),
+            "ai_model_used": "None",
+            "ai_inference_provider": "None",
+            "extraction_status": "EXTRACTION_FAILED",
+            "ai_analysis": f"Multi-modal vision extraction unavailable for image '{filename}'. Manual entry required."
+        }
+
     text_content = ""
     try:
         text_content = content_bytes.decode('utf-8', errors='ignore')
     except Exception:
         text_content = ""
+
+    # If document has no readable plaintext (e.g. binary compressed PDF)
+    if not text_content or len(text_content.strip()) < 10:
+        return {
+            "invoice_number": None,
+            "vendor": "Unextracted (Binary Document)",
+            "tax_id": None,
+            "vendor_trusted": False,
+            "vendor_domain": None,
+            "currency": "USD",
+            "subtotal": 0.0,
+            "tax_rate": 0.0,
+            "tax_amount": 0.0,
+            "grand_total": 0.0,
+            "issue_date": None,
+            "due_date": None,
+            "line_items": [],
+            "extraction_confidence": 0.0,
+            "raw_byte_length": len(content_bytes),
+            "ai_model_used": "None",
+            "ai_inference_provider": "None",
+            "extraction_status": "EXTRACTION_FAILED",
+            "ai_analysis": f"Binary document '{filename}' contains no readable plaintext and Bedrock was unavailable. Flagged for manual review."
+        }
 
     # 1. Search for amount in document text
     extracted_amount = None
@@ -208,31 +259,45 @@ def parse_document_content_rules(content_bytes: bytes, filename: str, document_i
             matched_vendor = vendor
             break
 
+    # If vendor is not in known registry, do NOT guess or synthesize from document_id
     if not matched_vendor:
-        content_lower = (text_content + " " + filename).lower()
-        if "aws" in content_lower or "amazon" in content_lower:
-            matched_vendor = SAMPLE_VENDORS[0]
-            if extracted_amount is None: extracted_amount = 1420.50
-        elif "github" in content_lower:
-            matched_vendor = SAMPLE_VENDORS[1]
-            if extracted_amount is None: extracted_amount = 399.00
-        elif "fraud" in content_lower or "shadow" in content_lower or "suspicious" in content_lower or "apex" in content_lower:
-            matched_vendor = SAMPLE_VENDORS[3] if "apex" in content_lower else SAMPLE_VENDORS[4]
-            if extracted_amount is None: extracted_amount = 89500.00
-        else:
-            choice_idx = sum(ord(c) for c in document_id) % len(SAMPLE_VENDORS)
-            matched_vendor = SAMPLE_VENDORS[choice_idx]
-            if extracted_amount is None:
-                extracted_amount = 2500.00 + (sum(ord(c) for c in document_id) % 5000)
+        matched_vendor = {
+            "name": "Unknown / Unregistered Vendor",
+            "tax_id": "UNREGISTERED",
+            "domain": "unknown",
+            "trusted": False
+        }
 
+    today = datetime.date.today()
+    due_date = today + datetime.timedelta(days=30)
+
+    # Fail closed on amount: do NOT invent default numbers if amount could not be found
     if extracted_amount is None:
-        extracted_amount = 1250.00
+        return {
+            "invoice_number": extracted_inv_num,
+            "vendor": matched_vendor["name"],
+            "tax_id": matched_vendor["tax_id"],
+            "vendor_trusted": matched_vendor["trusted"],
+            "vendor_domain": matched_vendor["domain"],
+            "currency": "USD",
+            "subtotal": 0.0,
+            "tax_rate": 0.0,
+            "tax_amount": 0.0,
+            "grand_total": 0.0,
+            "issue_date": today.isoformat(),
+            "due_date": due_date.isoformat(),
+            "line_items": [],
+            "extraction_confidence": 0.0,
+            "raw_byte_length": len(content_bytes),
+            "ai_model_used": "Deterministic Rule-Engine (Bedrock Fallback)",
+            "ai_inference_provider": "DocuFlow Heuristic Engine",
+            "extraction_status": "EXTRACTION_FAILED",
+            "ai_analysis": f"Vendor identified as '{matched_vendor['name']}', but no verified amounts were detected in text. Flagged for manual review."
+        }
 
     tax_rate = 0.18
     tax_amount = round(extracted_amount * tax_rate, 2)
     grand_total = round(extracted_amount + tax_amount, 2)
-    today = datetime.date.today()
-    due_date = today + datetime.timedelta(days=30)
 
     if not extracted_inv_num:
         extracted_inv_num = f"INV-{today.strftime('%Y%m')}-{document_id[:6].upper()}"
@@ -257,11 +322,12 @@ def parse_document_content_rules(content_bytes: bytes, filename: str, document_i
                 "unit_price": round(extracted_amount, 2)
             }
         ],
-        "extraction_confidence": 0.99,
+        "extraction_confidence": 0.95 if matched_vendor["trusted"] else 0.40,
         "raw_text_length": len(text_content),
         "ai_model_used": "Deterministic Rule-Engine (Bedrock Fallback)",
         "ai_inference_provider": "DocuFlow Heuristic Engine",
-        "ai_analysis": "Automated rule extraction verified against known enterprise vendor registry."
+        "extraction_status": "SUCCESS",
+        "ai_analysis": f"Rule-based extraction verified vendor '{matched_vendor['name']}' from document plaintext."
     }
 
 def lambda_handler(event, context):
@@ -272,14 +338,18 @@ def lambda_handler(event, context):
     s3_key = event.get("s3_key")
     filename = event.get("filename", "invoice.pdf")
 
-    # Read real bytes from S3 if bucket and key are present - Fail closed if missing
-    content_bytes = b""
-    if s3_bucket and s3_key:
-        try:
-            s3_obj = s3_client.get_object(Bucket=s3_bucket, Key=s3_key)
-            content_bytes = s3_obj['Body'].read()
-        except Exception as e:
-            raise FileNotFoundError(f"Document object s3://{s3_bucket}/{s3_key} could not be read: {e}")
+    if not document_id:
+        raise ValueError("Missing required field: document_id")
+
+    if not s3_bucket or not s3_key:
+        raise ValueError(f"Missing required S3 coordinates: s3_bucket and s3_key are mandatory for document {document_id}")
+
+    # Read real bytes from S3 - Fail closed if missing
+    try:
+        s3_obj = s3_client.get_object(Bucket=s3_bucket, Key=s3_key)
+        content_bytes = s3_obj['Body'].read()
+    except Exception as e:
+        raise FileNotFoundError(f"Document object s3://{s3_bucket}/{s3_key} could not be read: {e}")
 
     if not content_bytes:
         raise ValueError(f"Document payload is empty or missing for document {document_id}")

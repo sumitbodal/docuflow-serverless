@@ -95,10 +95,9 @@ class TestApiHandler(unittest.TestCase):
             "routeKey": "POST /api/documents/doc-12345/approve",
             "pathParameters": {"id": "doc-12345"},
             "requestContext": {"http": {"method": "POST"}},
-            "body": json.dumps({"action": "APPROVE", "reviewer": "Finance Director"})
+            "body": json.dumps({"action": "APPROVE", "reviewer": "Finance Director", "notes": "Approved after PO match"})
         }
         with patch.object(api_handler_app, 'table') as mock_table:
-            # Emulate DynamoDB returning stored task token
             mock_table.get_item.return_value = {
                 "Item": {
                     "document_id": "doc-12345",
@@ -114,6 +113,60 @@ class TestApiHandler(unittest.TestCase):
                 mock_sfn.send_task_success.assert_called_once()
                 call_args = mock_sfn.send_task_success.call_args[1]
                 self.assertEqual(call_args["taskToken"], "MockTaskToken12345==")
+                # Verify that message field is included so subsequent ASL states do not fail
+                payload = json.loads(call_args["output"])
+                self.assertIn("message", payload)
+                self.assertEqual(payload["status"], "APPROVED")
+                self.assertEqual(payload["decision"], "MANUAL_APPROVED")
+                self.assertEqual(payload["reviewer"], "Finance Director")
+                mock_table.update_item.assert_called_once()
+
+    def test_approve_document_missing_task_token_returns_400(self):
+        event = {
+            "routeKey": "POST /api/documents/doc-already-approved/approve",
+            "pathParameters": {"id": "doc-already-approved"},
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({"action": "APPROVE"})
+        }
+        with patch.object(api_handler_app, 'table') as mock_table:
+            # Document exists but is already approved (no task token)
+            mock_table.get_item.return_value = {
+                "Item": {
+                    "document_id": "doc-already-approved",
+                    "status": "APPROVED"
+                }
+            }
+            with patch.object(api_handler_app, 'sfn_client') as mock_sfn:
+                res = api_handler_app.lambda_handler(event, None)
+                self.assertEqual(res["statusCode"], 400)
+                data = json.loads(res["body"])
+                self.assertIn("not awaiting approval", data["error"])
+                mock_sfn.send_task_success.assert_not_called()
+                mock_table.update_item.assert_not_called()
+
+    def test_approve_document_fails_closed_when_sfn_resume_errors(self):
+        event = {
+            "routeKey": "POST /api/documents/doc-12345/approve",
+            "pathParameters": {"id": "doc-12345"},
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({"action": "APPROVE", "reviewer": "Finance Director"})
+        }
+        with patch.object(api_handler_app, 'table') as mock_table:
+            mock_table.get_item.return_value = {
+                "Item": {
+                    "document_id": "doc-12345",
+                    "task_token": "ExpiredTaskToken==",
+                    "status": "PENDING_APPROVAL"
+                }
+            }
+            with patch.object(api_handler_app, 'sfn_client') as mock_sfn:
+                mock_sfn.send_task_success.side_effect = Exception("TaskDoesNotExist: Task token has expired or is invalid.")
+                res = api_handler_app.lambda_handler(event, None)
+                self.assertEqual(res["statusCode"], 500)
+                data = json.loads(res["body"])
+                self.assertIn("Failed to resume Step Functions execution", data["error"])
+                # Fail closed: must NOT update document status to approved if Step Functions failed to resume
+                mock_table.update_item.assert_not_called()
 
     def test_approve_document_not_found_returns_404(self):
         event = {

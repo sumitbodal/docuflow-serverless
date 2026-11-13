@@ -184,5 +184,37 @@ class TestExtractor(unittest.TestCase):
                     self.assertFalse(data["vendor_trusted"])
                     self.assertEqual(data["subtotal"], 89500.00)
 
+    def test_binary_image_without_bedrock_fails_closed_without_inventing_data(self):
+        """Verifies that when Bedrock is offline, image documents fail closed without inventing fake amounts."""
+        binary_image_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRbinary_mock_bytes"
+        event = {
+            "document_id": "doc-test-binary",
+            "filename": "scan.png",
+            "s3_bucket": "test-bucket",
+            "s3_key": "uploads/doc-test-binary/scan.png"
+        }
+        with patch.object(extractor_app, 'table'):
+            with patch.object(extractor_app, 's3_client') as mock_s3:
+                with patch.object(extractor_app, 'bedrock_runtime') as mock_bedrock:
+                    mock_s3.get_object.return_value = {"Body": BytesIO(binary_image_bytes)}
+                    mock_bedrock.converse.side_effect = Exception("BedrockUnavailable")
+
+                    result = extractor_app.lambda_handler(event, None)
+                    data = result["extracted_data"]
+                    self.assertEqual(data["extraction_status"], "EXTRACTION_FAILED")
+                    self.assertEqual(data["grand_total"], 0.0)
+                    self.assertFalse(data["vendor_trusted"])
+                    self.assertEqual(data["extraction_confidence"], 0.0)
+
+    def test_missing_s3_coordinates_raises_value_error(self):
+        """Verifies that extractor requires s3_bucket and s3_key."""
+        event = {
+            "document_id": "doc-no-s3-coords",
+            "filename": "invoice.pdf"
+        }
+        with self.assertRaises(ValueError) as ctx:
+            extractor_app.lambda_handler(event, None)
+        self.assertIn("Missing required S3 coordinates", str(ctx.exception))
+
 if __name__ == '__main__':
     unittest.main()

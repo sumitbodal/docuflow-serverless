@@ -26,7 +26,7 @@ let localDocuments = [
       sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       integrity_verified: true,
       format_whitelisted: true,
-      compliance_cleared: true
+      size_within_limits: true
     },
     risk: {
       score: 5,
@@ -58,7 +58,7 @@ let localDocuments = [
       sha256: "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
       integrity_verified: true,
       format_whitelisted: true,
-      compliance_cleared: true
+      size_within_limits: true
     },
     risk: {
       score: 95,
@@ -316,7 +316,7 @@ async function executePipelineVisualizer(docId, filename) {
       sha256: `sha256_${docId.substring(0, 16)}`,
       integrity_verified: true,
       format_whitelisted: true,
-      compliance_cleared: true
+      size_within_limits: true
     },
     risk: {
       score: isHighRisk ? 92 : 8,
@@ -421,8 +421,8 @@ window.openDetailsModal = function(docId) {
 
   if (doc.status === "PENDING_APPROVAL") {
     modalFooter.innerHTML = `
-      <button class="btn-sm" style="border-color: var(--accent-red); color: var(--accent-red);" onclick="reviewDocument('${doc.document_id}', 'REJECT')">✕ Reject (sendTaskFailure)</button>
-      <button class="btn-primary" onclick="reviewDocument('${doc.document_id}', 'APPROVE')">✓ Approve (sendTaskSuccess)</button>
+      <button class="btn-sm" style="border-color: var(--accent-red); color: var(--accent-red);" onclick="reviewDocument('${doc.document_id}', 'REJECT')">✕ Reject (Manual Review)</button>
+      <button class="btn-primary" onclick="reviewDocument('${doc.document_id}', 'APPROVE')">✓ Approve (Manual Review)</button>
     `;
   } else {
     modalFooter.innerHTML = `
@@ -436,13 +436,18 @@ window.openDetailsModal = function(docId) {
 window.reviewDocument = async function(docId, action) {
   if (API_BASE_URL) {
     try {
-      await fetch(`${API_BASE_URL}/api/documents/${docId}/approve`, {
+      const resp = await fetch(`${API_BASE_URL}/api/documents/${docId}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: action, reviewer: "Demo Judge" })
+        body: JSON.stringify({ action: action, reviewer: "Enterprise Reviewer" })
       });
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        alert(`Approval callback failed (${resp.status}): ${errData.error || resp.statusText}`);
+        return;
+      }
     } catch (e) {
-      console.warn("API approve call failed, updating locally:", e);
+      console.warn("API approve call network error, updating locally:", e);
     }
   }
 

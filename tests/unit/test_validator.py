@@ -42,12 +42,23 @@ class TestValidator(unittest.TestCase):
                 self.assertEqual(sec["extension"], ".pdf")
                 self.assertTrue(sec["integrity_verified"])
                 self.assertTrue(sec["format_whitelisted"])
-                self.assertTrue(sec["compliance_cleared"])
+                self.assertTrue(sec["size_within_limits"])
+                self.assertNotIn("compliance_cleared", sec)
                 self.assertIn("sha256", sec)
                 # SHA256 of b"%PDF-1.4 Mock Invoice Content"
                 import hashlib
                 expected_sha = hashlib.sha256(b"%PDF-1.4 Mock Invoice Content").hexdigest()
                 self.assertEqual(sec["sha256"], expected_sha)
+
+    def test_missing_s3_coordinates_raises_error(self):
+        """Verifies validator requires s3_bucket and s3_key and rejects synthetic fallback."""
+        event = {
+            "document_id": "test-uuid-no-coords",
+            "filename": "invoice.pdf"
+        }
+        with self.assertRaises(ValueError) as ctx:
+            validator_app.lambda_handler(event, None)
+        self.assertIn("Missing required S3 coordinates", str(ctx.exception))
 
     def test_missing_s3_object_fails_closed(self):
         """Verifies fail-closed behavior when S3 object cannot be found."""
