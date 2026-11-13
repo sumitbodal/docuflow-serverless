@@ -9,11 +9,6 @@ Parameters:
     Type: String
     Default: 'reviewer@example.com'
     Description: Email address for high-risk document review and approval notifications. IMPORTANT: Check your inbox and click 'Confirm Subscription' in the AWS SNS verification email after deploy.
-  DocuFlowApiKey:
-    Type: String
-    NoEcho: true
-    Default: 'docuflow-secure-admin-token-2026'
-    Description: Secret API key for authenticated API Gateway access. For enterprise public deployments, configure Amazon Cognito User Pool Authorizer with OAuth PKCE.
 
 Globals:
   Function:
@@ -107,21 +102,42 @@ Resources:
         Enabled: true
 
   # ============================================================================
-  # 3. API GATEWAY: Amazon API Gateway (HTTP API v2)
-  # NOTE ON AUTHENTICATION & PRODUCTION HARDENING:
-  # Out of the box, endpoints are unauthenticated for zero-friction hackathon evaluation
-  # and live judging. For production deployments with real enterprise invoices, enable
-  # Amazon Cognito User Pool Authorizer or Lambda Request Authorizer:
-  #
-  # Auth:
-  #   Authorizers:
-  #     CognitoAuth:
-  #       IdentitySource: "$request.header.Authorization"
-  #       JwtConfiguration:
-  #         issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPoolId}"
-  #         audience:
-  #           - !Ref CognitoUserPoolClientId
-  #   DefaultAuthorizer: CognitoAuth
+  # 2b. AUTHENTICATION: Amazon Cognito User Pool (Real Enterprise JWT Auth)
+  # ============================================================================
+  DocuFlowUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub 'docuflow-users-${AWS::AccountId}-${AWS::Region}'
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+
+  DocuFlowUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: DocuFlowWebClient
+      UserPoolId: !Ref DocuFlowUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      PreventUserExistenceErrors: ENABLED
+
+  # ============================================================================
+  # 3. API GATEWAY: Amazon API Gateway (HTTP API v2 with Native Cognito Authorizer)
+  # Protected natively by Amazon Cognito User Pool Authorizer.
+  # Requests lacking a valid Cognito JWT Bearer token are rejected with HTTP 401.
   # ============================================================================
   DocuFlowHttpApi:
     Type: AWS::Serverless::HttpApi
@@ -131,6 +147,15 @@ Resources:
         AllowHeaders: ['*']
         AllowMethods: [GET, POST, OPTIONS]
         MaxAge: 600
+      Auth:
+        Authorizers:
+          CognitoAuthorizer:
+            IdentitySource: "$request.header.Authorization"
+            JwtConfiguration:
+              issuer: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${DocuFlowUserPool}"
+              audience:
+                - !Ref DocuFlowUserPoolClient
+        DefaultAuthorizer: CognitoAuthorizer
 
   # ============================================================================
   # 4. COMPUTE: AWS Lambda Functions
@@ -322,3 +347,15 @@ Outputs:
   ReviewerConfirmationNotice:
     Description: Required deployment verification for human-in-the-loop email notifications
     Value: !Sub 'An AWS SNS confirmation email has been dispatched to ${ReviewerEmail}. The recipient MUST click "Confirm Subscription" before alerts can be received.'
+
+  CognitoUserPoolId:
+    Description: Amazon Cognito User Pool ID for real enterprise authentication
+    Value: !Ref DocuFlowUserPool
+
+  CognitoUserPoolClientId:
+    Description: Amazon Cognito User Pool Web Client ID for browser dashboard
+    Value: !Ref DocuFlowUserPoolClient
+
+  CognitoIssuerUrl:
+    Description: Cognito JWT Token Issuer URL
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${DocuFlowUserPool}"

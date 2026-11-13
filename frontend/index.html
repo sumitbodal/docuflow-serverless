@@ -209,9 +209,9 @@
         <input type="text" id="apiUrlInput" class="text-input" placeholder="https://xxxx.execute-api.us-east-1.amazonaws.com">
         <p class="subtext" style="margin-bottom: 12px;">Leave empty to run in local interactive simulation mode (ideal for offline review &amp; instant demo testing).</p>
 
-        <label for="apiTokenInput"><strong>Authorization / Bearer Token:</strong></label>
-        <input type="password" id="apiTokenInput" class="text-input" placeholder="e.g. Bearer JWT / API Key">
-        <p class="subtext">Passed as <code>Authorization: Bearer &lt;token&gt;</code> to secure all endpoints (list, get, upload, process, approve). In production, use Amazon Cognito User Pool Authorizer with OAuth PKCE.</p>
+        <label for="apiTokenInput"><strong>Amazon Cognito JWT Token:</strong></label>
+        <input type="password" id="apiTokenInput" class="text-input" placeholder="eyJraWQiOiJ... (Cognito User Pool ID/Access Token)">
+        <p class="subtext">Passed as <code>Authorization: Bearer &lt;cognito-jwt&gt;</code> and validated natively by Amazon API Gateway's Cognito Authorizer.</p>
       </div>
       <div class="modal-footer">
         <button class="btn-primary" id="saveConfigBtn">Save &amp; Connect</button>

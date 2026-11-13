@@ -147,16 +147,15 @@ Even without active cloud credentials, you can immediately test DocuFlow AI:
 ---
 
 ## 🔒 Security & Production Hardening
-- **Demonstration Scope**: The repository is configured out-of-the-box for evaluation with open CORS and an S3 website bucket so judges and reviewers can test without provisioning directory credentials.
-- **Enterprise Hardening Path**: For enterprise production environments handling sensitive financial records:
-  1. **API Gateway Auth**: Add an Amazon Cognito User Pool Authorizer or AWS IAM Authorizer under `Auth: DefaultAuthorizer` in `DocuFlowHttpApi`.
-  2. **Private Storage**: Remove public website configuration on `DocuFlowFrontendBucket` and front with Amazon CloudFront using Origin Access Control (OAC).
-  3. **WAF & Rate Limiting**: Attach AWS WAF to the API Gateway HTTP API to protect endpoints against brute force and DDoS.
+- **Native Amazon Cognito JWT Authorizer**: The SAM template provisions an `AWS::Cognito::UserPool` (`DocuFlowUserPool`) and web client (`DocuFlowUserPoolClient`). `DocuFlowHttpApi` enforces `DefaultAuthorizer: CognitoAuthorizer` natively at the API Gateway layer. All incoming requests must provide a valid Cognito JWT ID/Access token (`Authorization: Bearer <token>`); missing, forged, or expired tokens are rejected with HTTP 401 before Lambda is invoked.
+- **No Shared Frontend Keys**: Removed all hardcoded or predictable shared symmetric API keys from the SAM template and frontend client.
+- **Fail-Closed Architecture**: All pipeline stages fail closed—unauthenticated requests return HTTP 401, missing or corrupt records return HTTP 404/500 without guessing S3 paths, and approval decisions require explicit `"APPROVE"` or `"REJECT"` actions.
+- **Private Storage**: For enterprise deployments, front `DocuFlowFrontendBucket` with Amazon CloudFront using Origin Access Control (OAC).
 
 ---
 
 ## 🧪 Automated Testing
-Run the comprehensive 28-test suite verifying all microservices, multi-modal Converse API parsing, fail-closed S3 guards, parallel inputs, task tokens, error propagation, and decimal serialization:
+Run the comprehensive 48-test suite verifying Cognito JWT authorization, fail-closed security, binary magic-byte inspection, multi-modal Converse API parsing, parallel fan-out, Step Functions task tokens, and decimal serialization:
 ```bash
 python -m unittest discover -s tests/unit -p "test_*.py" -v
 ```

@@ -1,13 +1,12 @@
 // DocuFlow AI - Frontend Controller (Updated with Parallel & TaskToken Orchestration)
 
 let API_BASE_URL = localStorage.getItem("DOCUFLOW_API_URL") || "";
-let API_AUTH_TOKEN = localStorage.getItem("DOCUFLOW_AUTH_TOKEN") || "";
+let API_AUTH_TOKEN = localStorage.getItem("DOCUFLOW_COGNITO_TOKEN") || localStorage.getItem("DOCUFLOW_AUTH_TOKEN") || "";
 
 function getAuthHeaders(customHeaders = {}) {
   const headers = { ...customHeaders };
   if (API_AUTH_TOKEN) {
     headers["Authorization"] = `Bearer ${API_AUTH_TOKEN}`;
-    headers["x-api-key"] = API_AUTH_TOKEN;
   }
   return headers;
 }
@@ -151,7 +150,7 @@ function setupEventListeners() {
     localStorage.setItem("DOCUFLOW_API_URL", API_BASE_URL);
     if (apiTokenInput) {
       API_AUTH_TOKEN = apiTokenInput.value.trim();
-      localStorage.setItem("DOCUFLOW_AUTH_TOKEN", API_AUTH_TOKEN);
+      localStorage.setItem("DOCUFLOW_COGNITO_TOKEN", API_AUTH_TOKEN);
     }
     configModal.classList.remove("show");
     fetchDocuments();

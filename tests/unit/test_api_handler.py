@@ -36,7 +36,7 @@ class TestApiHandler(unittest.TestCase):
             "routeKey": "GET /api/documents",
             "requestContext": {"http": {"method": "GET"}}
         }
-        with patch.object(api_handler_app, 'DOCUFLOW_API_KEY', ''):
+        with patch.dict(os.environ, {"DOCUFLOW_API_KEY": "", "ADMIN_API_KEY": ""}):
             res = api_handler_app.lambda_handler(event, None)
             self.assertEqual(res["statusCode"], 401)
             data = json.loads(res["body"])

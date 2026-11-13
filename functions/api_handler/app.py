@@ -54,46 +54,45 @@ def is_authorized(event: dict) -> bool:
     """
     Strict fail-closed authorization check.
     Accepts:
-    1. API Gateway JWT authorizer claims (Cognito User Pools / OAuth PKCE).
+    1. Real Amazon Cognito JWT Authorizer claims (validated natively by API Gateway).
     2. API Gateway Lambda authorizer context.
-    3. Authorization header with valid Bearer token matching DOCUFLOW_API_KEY.
-    4. x-api-key header matching DOCUFLOW_API_KEY.
+    3. Optional ADMIN_API_KEY for automated CI/CD pipelines and unit test suites.
 
-    FAIL-CLOSED: If no authorizer claims exist and DOCUFLOW_API_KEY is not configured
-    or token does not match, all requests are strictly rejected with 401 Unauthorized.
+    FAIL-CLOSED: If no valid Cognito claims or authorizer context exist,
+    all requests are strictly rejected with 401 Unauthorized.
     """
-    # 1. API Gateway JWT / Cognito claims
+    # 1. API Gateway JWT claims from Cognito User Pool Authorizer
     jwt_claims = event.get("requestContext", {}).get("authorizer", {}).get("jwt", {}).get("claims")
-    if jwt_claims:
+    if jwt_claims and (jwt_claims.get("sub") or jwt_claims.get("email") or jwt_claims.get("username")):
         return True
 
-    # 2. Lambda authorizer context
+    # 2. Lambda authorizer context (if custom authorizer is used)
     auth_ctx = event.get("requestContext", {}).get("authorizer", {}).get("lambda")
-    if auth_ctx:
+    if auth_ctx and auth_ctx.get("isAuthorized") is not False:
         return True
 
-    # 3. Environment token validation - Fail closed if DOCUFLOW_API_KEY is unset or empty
-    if not DOCUFLOW_API_KEY:
-        return False
+    # 3. Optional Admin API Key (for automated backend test suites / CI/CD pipelines)
+    admin_key = os.environ.get("ADMIN_API_KEY", "").strip() or os.environ.get("DOCUFLOW_API_KEY", "").strip()
+    if admin_key:
+        headers = event.get("headers") or {}
+        auth_header = None
+        x_api_key = None
+        for k, v in headers.items():
+            k_lower = k.lower()
+            if k_lower == "authorization":
+                auth_header = v
+            elif k_lower == "x-api-key":
+                x_api_key = v
 
-    headers = event.get("headers") or {}
-    auth_header = None
-    x_api_key = None
-    for k, v in headers.items():
-        k_lower = k.lower()
-        if k_lower == "authorization":
-            auth_header = v
-        elif k_lower == "x-api-key":
-            x_api_key = v
+        if auth_header:
+            token = auth_header.replace("Bearer ", "").strip()
+            if token and token == admin_key:
+                return True
 
-    if auth_header:
-        token = auth_header.replace("Bearer ", "").strip()
-        if token and token == DOCUFLOW_API_KEY:
+        if x_api_key and x_api_key.strip() == admin_key:
             return True
 
-    if x_api_key and x_api_key.strip() == DOCUFLOW_API_KEY:
-        return True
-
+    # Strictly fail closed: Reject all unauthenticated requests
     return False
 
 def handle_get_upload_url(event):
