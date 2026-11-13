@@ -24,7 +24,13 @@
         <span class="pill-dot"></span>
         AWS Builder Center: No Pipeline, No Problem
       </div>
-      <div class="config-trigger" id="configTrigger">⚙️ API Config</div>
+      <div class="user-status-pill" id="userStatusPill" style="display: none;">
+        <span class="user-icon">👤</span>
+        <span id="userEmailBadge">user@example.com</span>
+        <span class="role-badge" id="userRoleBadge">Reviewer</span>
+        <button class="btn-logout" id="logoutBtn" title="Sign Out">Sign Out</button>
+      </div>
+      <div class="config-trigger" id="configTrigger">⚙️ Connect &amp; Sign In</div>
     </div>
   </header>
 
@@ -197,24 +203,57 @@
     </div>
   </div>
 
-  <!-- API Settings Modal -->
+  <!-- API Settings & Cognito Auth Modal -->
   <div class="modal-backdrop" id="configModal">
     <div class="modal-card">
       <div class="modal-header">
-        <h3>⚙️ Endpoint Configuration</h3>
+        <h3>🔐 Connect &amp; Authenticate</h3>
         <button class="close-btn" id="configClose">✕</button>
       </div>
       <div class="modal-body">
         <label for="apiUrlInput"><strong>AWS API Gateway Base URL:</strong></label>
         <input type="text" id="apiUrlInput" class="text-input" placeholder="https://xxxx.execute-api.us-east-1.amazonaws.com">
-        <p class="subtext" style="margin-bottom: 12px;">Leave empty to run in local interactive simulation mode (ideal for offline review &amp; instant demo testing).</p>
+        <p class="subtext" style="margin-bottom: 12px;">From CloudFormation output <code>HttpApiUrl</code>. Leave empty for local simulation mode.</p>
 
-        <label for="apiTokenInput"><strong>Amazon Cognito JWT Token:</strong></label>
-        <input type="password" id="apiTokenInput" class="text-input" placeholder="eyJraWQiOiJ... (Cognito User Pool ID/Access Token)">
-        <p class="subtext">Passed as <code>Authorization: Bearer &lt;cognito-jwt&gt;</code> and validated natively by Amazon API Gateway's Cognito Authorizer.</p>
+        <!-- Cognito Sign-In Panel -->
+        <div class="auth-box">
+          <div class="auth-box-title">🔑 Direct Amazon Cognito Sign-In</div>
+          <p class="subtext" style="margin-bottom: 8px;">Authenticates directly with AWS Cognito (<code>USER_PASSWORD_AUTH</code>) to obtain a verified JWT ID token.</p>
+          
+          <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+            <div style="flex: 2;">
+              <label for="cognitoClientIdInput"><small><strong>Cognito Client ID:</strong></small></label>
+              <input type="text" id="cognitoClientIdInput" class="text-input" placeholder="e.g. 7abc123def456...">
+            </div>
+            <div style="flex: 1;">
+              <label for="cognitoRegionInput"><small><strong>AWS Region:</strong></small></label>
+              <input type="text" id="cognitoRegionInput" class="text-input" value="us-east-1">
+            </div>
+          </div>
+
+          <label for="cognitoEmailInput"><small><strong>Reviewer Email:</strong></small></label>
+          <input type="email" id="cognitoEmailInput" class="text-input" placeholder="reviewer@example.com" style="margin-bottom: 0.5rem;">
+
+          <label for="cognitoPasswordInput"><small><strong>Password:</strong></small></label>
+          <input type="password" id="cognitoPasswordInput" class="text-input" placeholder="••••••••••••" style="margin-bottom: 0.5rem;">
+
+          <button class="btn-cognito" id="cognitoLoginBtn">Sign In with Cognito</button>
+          <div class="auth-status-msg" id="authStatusMsg"></div>
+        </div>
+
+        <!-- Manual Token Fallback -->
+        <div style="margin-top: 14px;">
+          <details>
+            <summary style="cursor: pointer; color: var(--text-muted); font-size: 0.8rem;">Advanced: Direct JWT Bearer Token / API Key</summary>
+            <div style="margin-top: 8px;">
+              <input type="password" id="apiTokenInput" class="text-input" placeholder="Paste raw Bearer JWT token or Admin Key">
+            </div>
+          </details>
+        </div>
       </div>
       <div class="modal-footer">
-        <button class="btn-primary" id="saveConfigBtn">Save &amp; Connect</button>
+        <button class="btn-secondary" id="configCancelBtn">Close</button>
+        <button class="btn-primary" id="saveConfigBtn">Save Settings</button>
       </div>
     </div>
   </div>

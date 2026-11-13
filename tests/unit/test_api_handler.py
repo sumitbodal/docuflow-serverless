@@ -534,5 +534,127 @@ class TestApiHandler(unittest.TestCase):
             data = json.loads(res["body"])
             self.assertIn("Failed to retrieve documents from DynamoDB", data["error"])
 
+    def test_approve_document_rejects_non_reviewer_role_with_403(self):
+        """Verifies users lacking the 'Reviewers' or 'Admins' group are strictly rejected with 403 Forbidden."""
+        event = {
+            "routeKey": "POST /api/documents/{id}/approve",
+            "pathParameters": {"id": "doc-test-123"},
+            "body": json.dumps({"action": "APPROVE"}),
+            "requestContext": {
+                "http": {"method": "POST"},
+                "authorizer": {
+                    "jwt": {
+                        "claims": {
+                            "sub": "user-regular-uuid",
+                            "email": "employee@company.com",
+                            "cognito:groups": ["Employees"]
+                        }
+                    }
+                }
+            }
+        }
+        with patch.dict(os.environ, {"ADMIN_API_KEY": "", "DOCUFLOW_API_KEY": ""}):
+            res = api_handler_app.lambda_handler(event, None)
+            self.assertEqual(res["statusCode"], 403)
+            data = json.loads(res["body"])
+            self.assertIn("Forbidden", data["error"])
+            self.assertIn("Reviewers", data["error"])
+
+    def test_approve_document_allows_user_in_reviewers_group(self):
+        """Verifies users belonging to the 'Reviewers' Cognito group can approve documents."""
+        event = {
+            "routeKey": "POST /api/documents/{id}/approve",
+            "pathParameters": {"id": "doc-test-456"},
+            "body": json.dumps({"action": "APPROVE", "notes": "Approved by compliance"}),
+            "requestContext": {
+                "http": {"method": "POST"},
+                "authorizer": {
+                    "jwt": {
+                        "claims": {
+                            "sub": "reviewer-uuid-789",
+                            "email": "reviewer@company.com",
+                            "cognito:groups": ["Reviewers"]
+                        }
+                    }
+                }
+            }
+        }
+        with patch.dict(os.environ, {"ADMIN_API_KEY": "", "DOCUFLOW_API_KEY": ""}), \
+             patch.object(api_handler_app, 'table') as mock_table, \
+             patch.object(api_handler_app, 'sfn_client') as mock_sfn:
+            mock_table.get_item.return_value = {
+                "Item": {
+                    "document_id": "doc-test-456",
+                    "status": "PENDING_APPROVAL",
+                    "task_token": "ValidTaskToken=="
+                }
+            }
+            res = api_handler_app.lambda_handler(event, None)
+            self.assertEqual(res["statusCode"], 200)
+            data = json.loads(res["body"])
+            self.assertEqual(data["status"], "APPROVED")
+            mock_sfn.send_task_success.assert_called_once()
+
+    def test_list_documents_isolates_non_reviewer_tenant_data(self):
+        """Verifies non-reviewers only receive documents they own."""
+        event = {
+            "routeKey": "GET /api/documents",
+            "requestContext": {
+                "http": {"method": "GET"},
+                "authorizer": {
+                    "jwt": {
+                        "claims": {
+                            "sub": "user-alice",
+                            "email": "alice@company.com"
+                        }
+                    }
+                }
+            }
+        }
+        with patch.dict(os.environ, {"ADMIN_API_KEY": "", "DOCUFLOW_API_KEY": ""}), \
+             patch.object(api_handler_app, 'table') as mock_table:
+            mock_table.query.return_value = {
+                "Items": [
+                    {"document_id": "doc-1", "owner": "user-alice", "filename": "alice.pdf"},
+                    {"document_id": "doc-2", "owner": "user-bob", "filename": "bob.pdf"}
+                ]
+            }
+            res = api_handler_app.lambda_handler(event, None)
+            self.assertEqual(res["statusCode"], 200)
+            data = json.loads(res["body"])
+            self.assertEqual(data["count"], 1)
+            self.assertEqual(data["documents"][0]["document_id"], "doc-1")
+
+    def test_get_document_denies_other_user_document_with_403(self):
+        """Verifies non-reviewers cannot view another user's document."""
+        event = {
+            "routeKey": "GET /api/documents/{id}",
+            "pathParameters": {"id": "doc-bob"},
+            "requestContext": {
+                "http": {"method": "GET"},
+                "authorizer": {
+                    "jwt": {
+                        "claims": {
+                            "sub": "user-alice",
+                            "email": "alice@company.com"
+                        }
+                    }
+                }
+            }
+        }
+        with patch.dict(os.environ, {"ADMIN_API_KEY": "", "DOCUFLOW_API_KEY": ""}), \
+             patch.object(api_handler_app, 'table') as mock_table:
+            mock_table.get_item.return_value = {
+                "Item": {
+                    "document_id": "doc-bob",
+                    "owner": "user-bob",
+                    "uploaded_by": "bob@company.com"
+                }
+            }
+            res = api_handler_app.lambda_handler(event, None)
+            self.assertEqual(res["statusCode"], 403)
+            data = json.loads(res["body"])
+            self.assertIn("Forbidden", data["error"])
+
 if __name__ == '__main__':
     unittest.main()

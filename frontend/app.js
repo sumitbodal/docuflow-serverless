@@ -2,6 +2,96 @@
 
 let API_BASE_URL = localStorage.getItem("DOCUFLOW_API_URL") || "";
 let API_AUTH_TOKEN = localStorage.getItem("DOCUFLOW_COGNITO_TOKEN") || localStorage.getItem("DOCUFLOW_AUTH_TOKEN") || "";
+let COGNITO_CLIENT_ID = localStorage.getItem("DOCUFLOW_COGNITO_CLIENT_ID") || "";
+let AWS_REGION = localStorage.getItem("DOCUFLOW_AWS_REGION") || "us-east-1";
+let USER_EMAIL = localStorage.getItem("DOCUFLOW_USER_EMAIL") || "";
+let USER_ROLE = localStorage.getItem("DOCUFLOW_USER_ROLE") || "";
+
+function parseJwt(token) {
+  try {
+    const base64Url = token.split('.')[1];
+    if (!base64Url) return null;
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+      return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+    }).join(''));
+    return JSON.parse(jsonPayload);
+  } catch (e) {
+    return null;
+  }
+}
+
+function updateAuthUI() {
+  const userStatusPill = document.getElementById("userStatusPill");
+  const userEmailBadge = document.getElementById("userEmailBadge");
+  const userRoleBadge = document.getElementById("userRoleBadge");
+  const configTrigger = document.getElementById("configTrigger");
+
+  if (API_AUTH_TOKEN) {
+    const claims = parseJwt(API_AUTH_TOKEN);
+    let email = USER_EMAIL;
+    let isReviewer = USER_ROLE === "Reviewer";
+
+    if (claims) {
+      email = claims.email || claims["cognito:username"] || email || "Authenticated User";
+      const groups = claims["cognito:groups"] || [];
+      const groupList = Array.isArray(groups) ? groups : [groups];
+      isReviewer = groupList.includes("Reviewers") || groupList.includes("Admins");
+    }
+
+    if (userStatusPill && userEmailBadge && userRoleBadge) {
+      userEmailBadge.innerText = email || "Authenticated User";
+      userRoleBadge.innerText = isReviewer ? "Reviewer" : "Standard User";
+      userRoleBadge.className = isReviewer ? "role-badge" : "role-badge role-standard";
+      userStatusPill.style.display = "flex";
+    }
+
+    if (configTrigger) {
+      configTrigger.innerText = "⚙️ Connected";
+    }
+  } else {
+    if (userStatusPill) userStatusPill.style.display = "none";
+    if (configTrigger) configTrigger.innerText = "⚙️ Connect & Sign In";
+  }
+}
+
+async function loginWithCognito(email, password, clientId, region) {
+  const endpoint = `https://cognito-idp.${region}.amazonaws.com/`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-amz-json-1.1",
+      "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth"
+    },
+    body: JSON.stringify({
+      AuthFlow: "USER_PASSWORD_AUTH",
+      ClientId: clientId,
+      AuthParameters: {
+        USERNAME: email,
+        PASSWORD: password
+      }
+    })
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    const errorMsg = data.message || data.__type || "Authentication failed";
+    throw new Error(errorMsg);
+  }
+
+  if (data.AuthenticationResult && data.AuthenticationResult.IdToken) {
+    return {
+      idToken: data.AuthenticationResult.IdToken,
+      accessToken: data.AuthenticationResult.AccessToken
+    };
+  }
+
+  if (data.ChallengeName === "NEW_PASSWORD_REQUIRED") {
+    throw new Error("Temporary password detected: Set a permanent password using 'aws cognito-idp admin-set-user-password --permanent' before signing in.");
+  }
+
+  throw new Error("Cognito authentication failed: " + (data.message || "Unknown error"));
+}
 
 function getAuthHeaders(customHeaders = {}) {
   const headers = { ...customHeaders };
@@ -97,11 +187,24 @@ const configClose = document.getElementById("configClose");
 const apiUrlInput = document.getElementById("apiUrlInput");
 const apiTokenInput = document.getElementById("apiTokenInput");
 const saveConfigBtn = document.getElementById("saveConfigBtn");
+const cognitoClientIdInput = document.getElementById("cognitoClientIdInput");
+const cognitoRegionInput = document.getElementById("cognitoRegionInput");
+const cognitoEmailInput = document.getElementById("cognitoEmailInput");
+const cognitoPasswordInput = document.getElementById("cognitoPasswordInput");
+const cognitoLoginBtn = document.getElementById("cognitoLoginBtn");
+const authStatusMsg = document.getElementById("authStatusMsg");
+const logoutBtn = document.getElementById("logoutBtn");
+const configCancelBtn = document.getElementById("configCancelBtn");
 
 // Initialize
 document.addEventListener("DOMContentLoaded", () => {
   if (apiUrlInput) apiUrlInput.value = API_BASE_URL;
   if (apiTokenInput) apiTokenInput.value = API_AUTH_TOKEN;
+  if (cognitoClientIdInput) cognitoClientIdInput.value = COGNITO_CLIENT_ID;
+  if (cognitoRegionInput) cognitoRegionInput.value = AWS_REGION;
+  if (cognitoEmailInput && USER_EMAIL) cognitoEmailInput.value = USER_EMAIL;
+
+  updateAuthUI();
   renderDocumentsTable();
   setupEventListeners();
 });
@@ -144,14 +247,117 @@ function setupEventListeners() {
   modalClose.addEventListener("click", () => modalBackdrop.classList.remove("show"));
   configTrigger.addEventListener("click", () => configModal.classList.add("show"));
   configClose.addEventListener("click", () => configModal.classList.remove("show"));
+  if (configCancelBtn) {
+    configCancelBtn.addEventListener("click", () => configModal.classList.remove("show"));
+  }
+
+  // Logout listener
+  if (logoutBtn) {
+    logoutBtn.addEventListener("click", () => {
+      API_AUTH_TOKEN = "";
+      USER_EMAIL = "";
+      USER_ROLE = "";
+      localStorage.removeItem("DOCUFLOW_COGNITO_TOKEN");
+      localStorage.removeItem("DOCUFLOW_AUTH_TOKEN");
+      localStorage.removeItem("DOCUFLOW_USER_EMAIL");
+      localStorage.removeItem("DOCUFLOW_USER_ROLE");
+      if (apiTokenInput) apiTokenInput.value = "";
+      updateAuthUI();
+      fetchDocuments();
+    });
+  }
+
+  // Cognito direct Sign-In listener
+  if (cognitoLoginBtn) {
+    cognitoLoginBtn.addEventListener("click", async () => {
+      const email = cognitoEmailInput ? cognitoEmailInput.value.trim() : "";
+      const password = cognitoPasswordInput ? cognitoPasswordInput.value : "";
+      const clientId = cognitoClientIdInput ? cognitoClientIdInput.value.trim() : "";
+      const region = cognitoRegionInput ? cognitoRegionInput.value.trim() : "us-east-1";
+
+      if (!email || !password || !clientId) {
+        if (authStatusMsg) {
+          authStatusMsg.className = "auth-status-msg error";
+          authStatusMsg.innerText = "Please provide Cognito Client ID, Email, and Password.";
+        }
+        return;
+      }
+
+      cognitoLoginBtn.disabled = true;
+      cognitoLoginBtn.innerText = "Authenticating with AWS Cognito...";
+      if (authStatusMsg) authStatusMsg.style.display = "none";
+
+      try {
+        const tokens = await loginWithCognito(email, password, clientId, region);
+        API_AUTH_TOKEN = tokens.idToken;
+        localStorage.setItem("DOCUFLOW_COGNITO_TOKEN", API_AUTH_TOKEN);
+        localStorage.setItem("DOCUFLOW_COGNITO_CLIENT_ID", clientId);
+        localStorage.setItem("DOCUFLOW_AWS_REGION", region);
+
+        const claims = parseJwt(API_AUTH_TOKEN);
+        if (claims) {
+          USER_EMAIL = claims.email || email;
+          const groups = claims["cognito:groups"] || [];
+          const groupList = Array.isArray(groups) ? groups : [groups];
+          USER_ROLE = (groupList.includes("Reviewers") || groupList.includes("Admins")) ? "Reviewer" : "Standard User";
+          localStorage.setItem("DOCUFLOW_USER_EMAIL", USER_EMAIL);
+          localStorage.setItem("DOCUFLOW_USER_ROLE", USER_ROLE);
+        }
+
+        if (apiTokenInput) apiTokenInput.value = API_AUTH_TOKEN;
+
+        if (apiUrlInput && apiUrlInput.value.trim()) {
+          API_BASE_URL = apiUrlInput.value.trim().replace(/\/+$/, "");
+          localStorage.setItem("DOCUFLOW_API_URL", API_BASE_URL);
+        }
+
+        if (authStatusMsg) {
+          authStatusMsg.className = "auth-status-msg success";
+          authStatusMsg.innerText = `Signed in successfully as ${USER_EMAIL} (${USER_ROLE})!`;
+        }
+
+        setTimeout(() => {
+          configModal.classList.remove("show");
+          updateAuthUI();
+          fetchDocuments();
+        }, 800);
+      } catch (err) {
+        if (authStatusMsg) {
+          authStatusMsg.className = "auth-status-msg error";
+          authStatusMsg.innerText = err.message || "Failed to authenticate with Cognito.";
+        }
+      } finally {
+        cognitoLoginBtn.disabled = false;
+        cognitoLoginBtn.innerText = "Sign In with Cognito";
+      }
+    });
+  }
 
   saveConfigBtn.addEventListener("click", () => {
     API_BASE_URL = apiUrlInput.value.trim().replace(/\/+$/, "");
     localStorage.setItem("DOCUFLOW_API_URL", API_BASE_URL);
+    if (cognitoClientIdInput) {
+      COGNITO_CLIENT_ID = cognitoClientIdInput.value.trim();
+      localStorage.setItem("DOCUFLOW_COGNITO_CLIENT_ID", COGNITO_CLIENT_ID);
+    }
+    if (cognitoRegionInput) {
+      AWS_REGION = cognitoRegionInput.value.trim();
+      localStorage.setItem("DOCUFLOW_AWS_REGION", AWS_REGION);
+    }
     if (apiTokenInput) {
       API_AUTH_TOKEN = apiTokenInput.value.trim();
       localStorage.setItem("DOCUFLOW_COGNITO_TOKEN", API_AUTH_TOKEN);
+      const claims = parseJwt(API_AUTH_TOKEN);
+      if (claims) {
+        USER_EMAIL = claims.email || "";
+        const groups = claims["cognito:groups"] || [];
+        const groupList = Array.isArray(groups) ? groups : [groups];
+        USER_ROLE = (groupList.includes("Reviewers") || groupList.includes("Admins")) ? "Reviewer" : "Standard User";
+        localStorage.setItem("DOCUFLOW_USER_EMAIL", USER_EMAIL);
+        localStorage.setItem("DOCUFLOW_USER_ROLE", USER_ROLE);
+      }
     }
+    updateAuthUI();
     configModal.classList.remove("show");
     fetchDocuments();
   });

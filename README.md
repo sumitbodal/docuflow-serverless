@@ -113,49 +113,74 @@ DocuFlow AI utilizes an efficient single-table access pattern with true numeric 
 - AWS SAM CLI (`sam --version`)
 
 ### 1. Build and Deploy to AWS
-Deploy the complete serverless stack with a single command:
+Deploy the complete serverless stack with a single command (override `ReviewerEmail` with your real alert email address):
 ```bash
 sam build
 sam deploy --guided
+# Or pass directly:
+# sam deploy --parameter-overrides ReviewerEmail=your-email@domain.com
 ```
-SAM will provision the S3 buckets, DynamoDB table, API Gateway, Lambda functions, SNS topic with subscription, and Step Functions state machine automatically.
+SAM provisions the S3 buckets, DynamoDB table, API Gateway HTTP API with native Cognito JWT authorizer, Lambda functions, SNS topic with email subscription, and Step Functions state machine automatically.
 
 > [!IMPORTANT]
-> **SNS Reviewer Confirmation Required**: Immediately after deployment, AWS SNS sends an **"AWS Notification - Subscription Confirmation"** email to the configured `ReviewerEmail`. The recipient must click **"Confirm Subscription"** in that email before Amazon SNS will deliver high-risk invoice approval alerts.
+> **SNS Reviewer Confirmation Required**: Immediately after deployment, AWS SNS sends an **"AWS Notification - Subscription Confirmation"** email to the configured `ReviewerEmail`. The recipient must open that email and click **"Confirm Subscription"** before Amazon SNS will deliver high-risk invoice approval alerts.
 
-### 2. Deploy Web Dashboard to S3
+### 2. Configure Reviewer Account in Amazon Cognito
+DocuFlow uses an enterprise-hardened Cognito User Pool where public self-registration is disabled (`AllowAdminCreateUserOnly: true`) and approvals require membership in the `Reviewers` group. Create your authorized reviewer account using the AWS CLI:
+
+```bash
+# 1. Retrieve Cognito User Pool ID from deployment outputs
+USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name docuflow --query "Stacks[0].Outputs[?OutputKey=='CognitoUserPoolId'].OutputValue" --output text)
+
+# 2. Create the reviewer user
+aws cognito-idp admin-create-user \
+  --user-pool-id $USER_POOL_ID \
+  --username reviewer@example.com \
+  --user-attributes Name=email,Value=reviewer@example.com \
+  --message-action SUPPRESS
+
+# 3. Set a permanent password (e.g. DocuFlow2026!)
+aws cognito-idp admin-set-user-password \
+  --user-pool-id $USER_POOL_ID \
+  --username reviewer@example.com \
+  --password "DocuFlow2026!" \
+  --permanent
+
+# 4. Assign user to the Reviewers group (required for document approvals)
+aws cognito-idp admin-add-user-to-group \
+  --user-pool-id $USER_POOL_ID \
+  --username reviewer@example.com \
+  --group-name Reviewers
+```
+
+### 3. Deploy Web Dashboard to S3 & Sign In
 ```bash
 aws s3 sync frontend/ s3://<DocuFlowFrontendBucketName>/
 ```
-*(Note: Do not supply `--acl public-read`. Modern S3 buckets disable ACLs by default; public website access is already managed cleanly by the bucket policy.)*
+*(Note: Do not supply `--acl public-read`. Modern S3 buckets disable ACLs by default; public website access is managed cleanly by the bucket policy.)*
 
-Open the Output `WebDashboardUrl` in your browser.
-
----
-
-## 💻 Running the Interactive Local Demo
-Even without active cloud credentials, you can immediately test DocuFlow AI:
-
-1. Open `frontend/index.html` in any web browser.
-2. Click on the Quick Preset buttons:
-   - ☁️ **AWS Cloud Invoice ($1,420.50)**: Demonstrates parallel analysis and low-risk straight-through auto-approval.
-   - 🐙 **GitHub Enterprise ($399.00)**: Demonstrates verified enterprise entity extraction.
-   - ⚠️ **Offshore Shadow Vendor ($89,500.00)**: Demonstrates anomaly detection (Score 92/100) halting at Step Functions `waitForTaskToken` state awaiting human approval.
-3. Inspect live JSON payloads and risk factors.
-4. Click **Approve (Manual Review)** or **Reject (Manual Review)** to simulate the human reviewer callback (passing the decision payload via `sendTaskSuccess`) and resume the Step Functions pipeline in real-time!
+1. Open the Output `WebDashboardUrl` in your browser.
+2. Click **⚙️ Connect & Sign In** in the top navigation bar.
+3. Enter your `HttpApiUrl` and `CognitoUserPoolClientId` (from SAM deployment outputs).
+4. Enter `reviewer@example.com` and password `DocuFlow2026!`, then click **Sign In with Cognito**.
+5. The dashboard authenticates directly with AWS Cognito (`USER_PASSWORD_AUTH`), obtains your verified JWT ID token, and displays your active `Reviewer` role badge!
 
 ---
 
-## 🔒 Security & Production Hardening
+## 🔒 Security, RBAC & Production Hardening
 - **Native Amazon Cognito JWT Authorizer**: The SAM template provisions an `AWS::Cognito::UserPool` (`DocuFlowUserPool`) and web client (`DocuFlowUserPoolClient`). `DocuFlowHttpApi` enforces `DefaultAuthorizer: CognitoAuthorizer` natively at the API Gateway layer. All incoming requests must provide a valid Cognito JWT ID/Access token (`Authorization: Bearer <token>`); missing, forged, or expired tokens are rejected with HTTP 401 before Lambda is invoked.
-- **No Shared Frontend Keys**: Removed all hardcoded or predictable shared symmetric API keys from the SAM template and frontend client.
+- **Role-Based Access Control (RBAC) & Tenant Isolation**:
+  - **Closed Registration**: `AllowAdminCreateUserOnly: true` blocks public self-registration.
+  - **Reviewer Group Enforcement**: Only users belonging to the `Reviewers` or `Admins` Cognito group can approve or reject documents via `POST /api/documents/{id}/approve` (non-reviewers receive HTTP 403 Forbidden).
+  - **Tenant / Owner Isolation**: Non-reviewer callers can only view and process documents they own (`owner: user_id`). Reviewers and Admins can view and audit all documents across the organization.
+- **Zero Shared Frontend Secrets**: Removed all hardcoded or predictable shared symmetric API keys from the SAM template and frontend client.
 - **Fail-Closed Architecture**: All pipeline stages fail closed—unauthenticated requests return HTTP 401, missing or corrupt records return HTTP 404/500 without guessing S3 paths, and approval decisions require explicit `"APPROVE"` or `"REJECT"` actions.
 - **Private Storage**: For enterprise deployments, front `DocuFlowFrontendBucket` with Amazon CloudFront using Origin Access Control (OAC).
 
 ---
 
 ## 🧪 Automated Testing
-Run the comprehensive 48-test suite verifying Cognito JWT authorization, fail-closed security, binary magic-byte inspection, multi-modal Converse API parsing, parallel fan-out, Step Functions task tokens, and decimal serialization:
+Run the comprehensive 52-test suite verifying Cognito JWT authorization, RBAC reviewer group enforcement, tenant isolation, fail-closed security, binary magic-byte inspection, multi-modal Converse API parsing, parallel fan-out, Step Functions task tokens, and decimal serialization:
 ```bash
 python -m unittest discover -s tests/unit -p "test_*.py" -v
 ```

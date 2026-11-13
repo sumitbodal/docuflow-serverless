@@ -8,7 +8,7 @@ Parameters:
   ReviewerEmail:
     Type: String
     Default: 'reviewer@example.com'
-    Description: Email address for high-risk document review and approval notifications. IMPORTANT: Check your inbox and click 'Confirm Subscription' in the AWS SNS verification email after deploy.
+    Description: Email address for high-risk document review notifications. Pass your email via --parameter-overrides ReviewerEmail=your-email@domain.com, then confirm the subscription in your inbox.
 
 Globals:
   Function:
@@ -109,7 +109,7 @@ Resources:
     Properties:
       UserPoolName: !Sub 'docuflow-users-${AWS::AccountId}-${AWS::Region}'
       AdminCreateUserConfig:
-        AllowAdminCreateUserOnly: false
+        AllowAdminCreateUserOnly: true
       AutoVerifiedAttributes:
         - email
       UsernameAttributes:
@@ -121,6 +121,22 @@ Resources:
           RequireLowercase: true
           RequireNumbers: true
           RequireSymbols: false
+
+  DocuFlowReviewersGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Reviewers
+      Description: Authorized compliance and finance reviewers permitted to approve or reject high-risk documents
+      UserPoolId: !Ref DocuFlowUserPool
+      Precedence: 1
+
+  DocuFlowAdminsGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Admins
+      Description: System administrators with full document inspection and override permissions
+      UserPoolId: !Ref DocuFlowUserPool
+      Precedence: 0
 
   DocuFlowUserPoolClient:
     Type: AWS::Cognito::UserPoolClient
@@ -168,7 +184,6 @@ Resources:
       Environment:
         Variables:
           STATE_MACHINE_ARN: !Ref DocuFlowStateMachine
-          DOCUFLOW_API_KEY: !Ref DocuFlowApiKey
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref DocuFlowTable

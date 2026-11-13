@@ -95,6 +95,62 @@ def is_authorized(event: dict) -> bool:
     # Strictly fail closed: Reject all unauthenticated requests
     return False
 
+def get_caller_identity(event: dict) -> dict:
+    """
+    Extracts authenticated caller identity, user ID, email, and group memberships.
+    Determines whether the user holds the 'Reviewers' or 'Admins' role.
+    """
+    jwt_claims = event.get("requestContext", {}).get("authorizer", {}).get("jwt", {}).get("claims") or {}
+    user_id = jwt_claims.get("sub") or jwt_claims.get("username")
+    email = jwt_claims.get("email", "")
+
+    # Parse Cognito groups (can be a list, or string like '["Reviewers"]' or 'Reviewers')
+    raw_groups = jwt_claims.get("cognito:groups", [])
+    groups = []
+    if isinstance(raw_groups, list):
+        groups = [str(g).strip(" '\"") for g in raw_groups]
+    elif isinstance(raw_groups, str):
+        cleaned = raw_groups.strip("[]'\" ")
+        if cleaned:
+            groups = [g.strip(" '\"") for g in cleaned.split(",")]
+
+    # Check Lambda authorizer context fallback
+    auth_ctx = event.get("requestContext", {}).get("authorizer", {}).get("lambda") or {}
+    if not user_id and auth_ctx:
+        user_id = auth_ctx.get("user_id") or auth_ctx.get("sub") or "lambda_user"
+        email = auth_ctx.get("email", "")
+        ctx_groups = auth_ctx.get("groups", [])
+        if isinstance(ctx_groups, list):
+            groups.extend([str(g).strip(" '\"") for g in ctx_groups])
+
+    # Check if request authenticated via ADMIN_API_KEY (automated CI/CD pipelines & test suites)
+    admin_key = os.environ.get("ADMIN_API_KEY", "").strip() or os.environ.get("DOCUFLOW_API_KEY", "").strip()
+    is_admin_key = False
+    if admin_key:
+        headers = event.get("headers") or {}
+        auth_header = None
+        x_api_key = None
+        for k, v in headers.items():
+            k_lower = k.lower()
+            if k_lower == "authorization":
+                auth_header = v
+            elif k_lower == "x-api-key":
+                x_api_key = v
+        if auth_header and auth_header.replace("Bearer ", "").strip() == admin_key:
+            is_admin_key = True
+        elif x_api_key and x_api_key.strip() == admin_key:
+            is_admin_key = True
+
+    is_reviewer = "Reviewers" in groups or "Admins" in groups or is_admin_key
+
+    return {
+        "user_id": user_id or ("admin_service" if is_admin_key else "anonymous"),
+        "email": email or ("admin@service" if is_admin_key else ""),
+        "groups": groups,
+        "is_reviewer": is_reviewer,
+        "is_admin_key": is_admin_key
+    }
+
 def handle_get_upload_url(event):
     """
     Step 1: Client requests a secure presigned URL to upload directly to S3.
@@ -166,6 +222,7 @@ def handle_get_upload_url(event):
             "document_id": document_id
         })
 
+    caller = get_caller_identity(event)
     item = {
         "PK": f"DOC#{document_id}",
         "SK": "METADATA",
@@ -178,6 +235,8 @@ def handle_get_upload_url(event):
         "content_type": content_type,
         "max_size_bytes": MAX_UPLOAD_SIZE_BYTES,
         "status": "UPLOAD_PENDING",
+        "owner": caller.get("user_id", "anonymous"),
+        "uploaded_by": caller.get("email") or caller.get("user_id", "anonymous"),
         "created_at": now_iso,
         "updated_at": now_iso
     }
@@ -229,6 +288,19 @@ def handle_process_document(event, document_id):
             "error": f"Document '{document_id}' not found in database. An upload URL must be requested before processing.",
             "document_id": document_id
         })
+
+    # RBAC / Tenant isolation: Non-reviewers can only process documents they own
+    caller = get_caller_identity(event)
+    if not caller.get("is_reviewer"):
+        doc_owner = doc.get("owner")
+        doc_uploader = doc.get("uploaded_by")
+        user_id = caller.get("user_id")
+        user_email = caller.get("email")
+        if doc_owner and doc_owner not in (user_id, "anonymous") and (not user_email or doc_uploader != user_email):
+            return build_response(403, {
+                "error": "Forbidden: You do not have permission to process documents belonging to another user.",
+                "document_id": document_id
+            })
 
     s3_key = doc.get("s3_key")
     s3_bucket = doc.get("s3_bucket", DOCS_BUCKET_NAME)
@@ -380,6 +452,17 @@ def handle_list_documents(event):
             })
 
     sanitized_items = [sanitize_document_record(i) for i in items]
+    caller = get_caller_identity(event)
+    # Reviewers and Admins see all documents; standard users only see documents they own
+    if not caller.get("is_reviewer"):
+        user_id = caller.get("user_id")
+        user_email = caller.get("email")
+        filtered_items = [
+            i for i in sanitized_items
+            if i.get("owner") == user_id or (user_email and i.get("uploaded_by") == user_email)
+        ]
+        return build_response(200, {"count": len(filtered_items), "documents": filtered_items})
+
     return build_response(200, {"count": len(sanitized_items), "documents": sanitized_items})
 
 def handle_get_document(event, document_id):
@@ -392,6 +475,20 @@ def handle_get_document(event, document_id):
         item = res.get("Item")
         if not item:
             return build_response(404, {"error": f"Document '{document_id}' not found."})
+
+        # RBAC / Tenant isolation: Non-reviewers can only view documents they own
+        caller = get_caller_identity(event)
+        if not caller.get("is_reviewer"):
+            doc_owner = item.get("owner")
+            doc_uploader = item.get("uploaded_by")
+            user_id = caller.get("user_id")
+            user_email = caller.get("email")
+            if doc_owner and doc_owner not in (user_id, "anonymous") and (not user_email or doc_uploader != user_email):
+                return build_response(403, {
+                    "error": "Forbidden: You do not have permission to view documents belonging to another user.",
+                    "document_id": document_id
+                })
+
         return build_response(200, sanitize_document_record(item))
     except Exception as e:
         print(f"DynamoDB get_item error for document {document_id}: {e}")
@@ -410,6 +507,13 @@ def handle_approve_document(event, document_id):
     if not is_authorized(event):
         return build_response(401, {
             "error": "Unauthorized: A valid Authorization header or API key is required to submit approval decisions."
+        })
+
+    # RBAC: Strictly require Reviewers or Admins group membership
+    caller = get_caller_identity(event)
+    if not caller.get("is_reviewer"):
+        return build_response(403, {
+            "error": "Forbidden: Submitting document approval decisions requires membership in the 'Reviewers' or 'Admins' Cognito group."
         })
 
     raw_body = event.get("body")
@@ -437,7 +541,7 @@ def handle_approve_document(event, document_id):
             "error": f"Invalid action '{raw_action}'. Allowed approval decisions are strictly 'APPROVE' or 'REJECT'."
         })
 
-    reviewer = body.get("reviewer") or "admin"
+    reviewer = body.get("reviewer") or caller.get("email") or caller.get("user_id") or "reviewer"
     notes = body.get("notes") or "Reviewed through DocuFlow dashboard"
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     new_status = "APPROVED" if action == "APPROVE" else "REJECTED"
