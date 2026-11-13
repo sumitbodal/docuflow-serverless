@@ -44,10 +44,55 @@ def build_response(status_code: int, body: dict):
             "Content-Type": "application/json",
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type,Authorization"
+            "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Api-Key"
         },
         "body": dumps_api_response(body)
     }
+
+def is_authorized(event: dict) -> bool:
+    """
+    Enforces authorization for privileged API routes.
+    Checks:
+    1. API Gateway JWT authorizer claims (Cognito User Pools / OIDC).
+    2. API Gateway Lambda authorizer context.
+    3. Authorization header ('Bearer <key>' or '<key>').
+    4. x-api-key header matching DOCUFLOW_API_KEY.
+    If DOCUFLOW_API_KEY is configured in the environment, requests must provide valid credentials.
+    If DOCUFLOW_API_KEY is unconfigured (local evaluation / demo mode), requests pass through.
+    """
+    # 1. API Gateway JWT / Cognito claims
+    jwt_claims = event.get("requestContext", {}).get("authorizer", {}).get("jwt", {}).get("claims")
+    if jwt_claims:
+        return True
+
+    # 2. Lambda authorizer context
+    auth_ctx = event.get("requestContext", {}).get("authorizer", {}).get("lambda")
+    if auth_ctx:
+        return True
+
+    # 3. Environment token validation
+    if not DOCUFLOW_API_KEY:
+        return True
+
+    headers = event.get("headers") or {}
+    auth_header = None
+    x_api_key = None
+    for k, v in headers.items():
+        k_lower = k.lower()
+        if k_lower == "authorization":
+            auth_header = v
+        elif k_lower == "x-api-key":
+            x_api_key = v
+
+    if auth_header:
+        token = auth_header.replace("Bearer ", "").strip()
+        if token == DOCUFLOW_API_KEY:
+            return True
+
+    if x_api_key and x_api_key.strip() == DOCUFLOW_API_KEY:
+        return True
+
+    return False
 
 def handle_get_upload_url(event):
     """
@@ -55,6 +100,10 @@ def handle_get_upload_url(event):
     Note: Does NOT trigger Step Functions prematurely.
     Workflow starts only after document bytes are actually uploaded to S3.
     """
+    if not is_authorized(event):
+        return build_response(401, {
+            "error": "Unauthorized: A valid Authorization header or API key is required to request upload URLs."
+        })
     body = {}
     if event.get("body"):
         try:
@@ -123,6 +172,11 @@ def handle_process_document(event, document_id):
     Step 2: Client or EventBridge confirms document is uploaded to S3.
     Now Step Functions is invoked with the verified S3 object.
     """
+    if not is_authorized(event):
+        return build_response(401, {
+            "error": "Unauthorized: A valid Authorization header or API key is required to trigger document processing."
+        })
+
     # 1. Fetch document metadata
     doc = None
     try:
@@ -285,30 +339,6 @@ def handle_get_document(event, document_id):
         return build_response(200, sanitize_document_record(item))
     except Exception as e:
         return build_response(500, {"error": str(e)})
-
-def is_authorized(event: dict) -> bool:
-    """
-    Validates caller authorization for privileged actions (e.g. human approval decisions).
-    If DOCUFLOW_API_KEY environment variable is configured, checks Authorization header
-    ('Bearer <key>' or '<key>').
-    If unconfigured (local evaluation / demo mode), requests pass through with a logged warning.
-    """
-    if not DOCUFLOW_API_KEY:
-        return True
-
-    headers = event.get("headers") or {}
-    # Case-insensitive header lookup
-    auth_header = None
-    for k, v in headers.items():
-        if k.lower() == "authorization":
-            auth_header = v
-            break
-
-    if not auth_header:
-        return False
-
-    token = auth_header.replace("Bearer ", "").strip()
-    return token == DOCUFLOW_API_KEY
 
 def handle_approve_document(event, document_id):
     """

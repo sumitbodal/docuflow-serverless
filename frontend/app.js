@@ -1,6 +1,16 @@
 // DocuFlow AI - Frontend Controller (Updated with Parallel & TaskToken Orchestration)
 
 let API_BASE_URL = localStorage.getItem("DOCUFLOW_API_URL") || "";
+let API_AUTH_TOKEN = localStorage.getItem("DOCUFLOW_AUTH_TOKEN") || "";
+
+function getAuthHeaders(customHeaders = {}) {
+  const headers = { ...customHeaders };
+  if (API_AUTH_TOKEN) {
+    headers["Authorization"] = `Bearer ${API_AUTH_TOKEN}`;
+    headers["x-api-key"] = API_AUTH_TOKEN;
+  }
+  return headers;
+}
 
 // In-memory demo store for offline/simulation mode
 let localDocuments = [
@@ -86,11 +96,13 @@ const configModal = document.getElementById("configModal");
 const configTrigger = document.getElementById("configTrigger");
 const configClose = document.getElementById("configClose");
 const apiUrlInput = document.getElementById("apiUrlInput");
+const apiTokenInput = document.getElementById("apiTokenInput");
 const saveConfigBtn = document.getElementById("saveConfigBtn");
 
 // Initialize
 document.addEventListener("DOMContentLoaded", () => {
   if (apiUrlInput) apiUrlInput.value = API_BASE_URL;
+  if (apiTokenInput) apiTokenInput.value = API_AUTH_TOKEN;
   renderDocumentsTable();
   setupEventListeners();
 });
@@ -137,6 +149,10 @@ function setupEventListeners() {
   saveConfigBtn.addEventListener("click", () => {
     API_BASE_URL = apiUrlInput.value.trim().replace(/\/+$/, "");
     localStorage.setItem("DOCUFLOW_API_URL", API_BASE_URL);
+    if (apiTokenInput) {
+      API_AUTH_TOKEN = apiTokenInput.value.trim();
+      localStorage.setItem("DOCUFLOW_AUTH_TOKEN", API_AUTH_TOKEN);
+    }
     configModal.classList.remove("show");
     fetchDocuments();
   });
@@ -171,7 +187,7 @@ async function handleFileUpload(file) {
       // 1. Get presigned upload URL from API Gateway
       const presignRes = await fetch(`${API_BASE_URL}/api/upload-url`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ filename: file.name, content_type: file.type || "application/pdf" })
       });
       if (!presignRes.ok) {
@@ -199,7 +215,8 @@ async function handleFileUpload(file) {
       stepParallel.className = "step-item running";
       stepParallel.querySelector(".step-status").innerText = "⨂";
       const processRes = await fetch(`${API_BASE_URL}/api/documents/${docId}/process`, {
-        method: "POST"
+        method: "POST",
+        headers: getAuthHeaders()
       });
       if (!processRes.ok) {
         const errJson = await processRes.json().catch(() => ({}));
@@ -210,7 +227,9 @@ async function handleFileUpload(file) {
       // 4. Poll document status to update live stepper
       for (let i = 0; i < 8; i++) {
         await new Promise(r => setTimeout(r, 1500));
-        const docRes = await fetch(`${API_BASE_URL}/api/documents/${docId}`);
+        const docRes = await fetch(`${API_BASE_URL}/api/documents/${docId}`, {
+          headers: getAuthHeaders()
+        });
         if (docRes.ok) {
           const doc = await docRes.json();
           if (doc.status !== "PROCESSING" && doc.status !== "UPLOAD_PENDING") {
@@ -371,7 +390,9 @@ async function fetchDocuments() {
   }
 
   try {
-    const res = await fetch(`${API_BASE_URL}/api/documents`);
+    const res = await fetch(`${API_BASE_URL}/api/documents`, {
+      headers: getAuthHeaders()
+    });
     const data = await res.json();
     if (data.documents && data.documents.length > 0) {
       localDocuments = data.documents;
@@ -473,7 +494,7 @@ window.reviewDocument = async function(docId, action) {
     try {
       const resp = await fetch(`${API_BASE_URL}/api/documents/${docId}/approve`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ action: action, reviewer: "Enterprise Reviewer" })
       });
       if (!resp.ok) {
@@ -482,7 +503,8 @@ window.reviewDocument = async function(docId, action) {
         return;
       }
     } catch (e) {
-      console.warn("API approve call network error, updating locally:", e);
+      alert(`Approval callback network error: ${e.message}`);
+      return;
     }
   }
 

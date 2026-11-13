@@ -4,6 +4,16 @@ Description: >
   DocuFlow AI - Resilient Serverless Document & Invoice Intelligence Engine
   AWS Builder Center 'No Pipeline, No Problem' Weekend Challenge Submission
 
+Parameters:
+  ReviewerEmail:
+    Type: String
+    Default: 'reviewer@example.com'
+    Description: Email address for high-risk document review and approval notifications.
+  DocuFlowApiKey:
+    Type: String
+    Default: 'docuflow-secure-admin-token-2026'
+    Description: Secret API key required for DocuFlow mutating endpoints (upload, process, approve).
+
 Globals:
   Function:
     Timeout: 30
@@ -132,6 +142,7 @@ Resources:
       Environment:
         Variables:
           STATE_MACHINE_ARN: !Ref DocuFlowStateMachine
+          DOCUFLOW_API_KEY: !Ref DocuFlowApiKey
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref DocuFlowTable
@@ -240,6 +251,13 @@ Resources:
       TopicName: !Sub 'docuflow-alerts-${AWS::AccountId}-${AWS::Region}'
       DisplayName: DocuFlow AI Real-time Enterprise Alert & Approval Topic
 
+  ReviewerEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref DocuFlowNotificationTopic
+      Protocol: email
+      Endpoint: !Ref ReviewerEmail
+
   # ============================================================================
   # 6. ORCHESTRATION: AWS Step Functions State Machine (Direct SDK Integrations)
   # ============================================================================
@@ -295,3 +313,7 @@ Outputs:
   FrontendBucketName:
     Description: S3 Static Website Hosting Bucket Name
     Value: !Ref DocuFlowFrontendBucket
+
+  ReviewerEmail:
+    Description: Subscribed reviewer email for high-risk escalation alerts
+    Value: !Ref ReviewerEmail

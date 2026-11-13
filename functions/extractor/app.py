@@ -382,7 +382,7 @@ def lambda_handler(event, context):
 
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-    # Persist extracted entities to DynamoDB with true Decimals
+    # Persist extracted entities to DynamoDB with true Decimals - Fail closed if persistence fails
     try:
         table.update_item(
             Key={"PK": f"DOC#{document_id}", "SK": "METADATA"},
@@ -395,7 +395,7 @@ def lambda_handler(event, context):
             }
         )
     except Exception as e:
-        print(f"DynamoDB update error in extractor: {e}")
+        raise RuntimeError(f"Failed to persist extracted entities to DynamoDB for document {document_id}: {e}")
 
     output_event = dict(event)
     output_event["extracted_data"] = extracted_data

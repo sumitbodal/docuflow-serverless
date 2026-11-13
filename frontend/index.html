@@ -207,7 +207,11 @@
       <div class="modal-body">
         <label for="apiUrlInput"><strong>AWS API Gateway Base URL:</strong></label>
         <input type="text" id="apiUrlInput" class="text-input" placeholder="https://xxxx.execute-api.us-east-1.amazonaws.com">
-        <p class="subtext">Leave empty to run in local interactive simulation mode (ideal for offline review &amp; instant demo testing).</p>
+        <p class="subtext" style="margin-bottom: 12px;">Leave empty to run in local interactive simulation mode (ideal for offline review &amp; instant demo testing).</p>
+
+        <label for="apiTokenInput"><strong>Authorization Token / API Key (Hardened Mode):</strong></label>
+        <input type="password" id="apiTokenInput" class="text-input" placeholder="e.g. docuflow-secure-admin-token-2026">
+        <p class="subtext">Passed as <code>Authorization: Bearer &lt;token&gt;</code> to secure upload, process, and manual approval endpoints.</p>
       </div>
       <div class="modal-footer">
         <button class="btn-primary" id="saveConfigBtn">Save &amp; Connect</button>

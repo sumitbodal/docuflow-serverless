@@ -251,5 +251,21 @@ class TestExtractor(unittest.TestCase):
             extractor_app.lambda_handler(event, None)
         self.assertIn("Missing required S3 coordinates", str(ctx.exception))
 
+    def test_extractor_fails_closed_when_dynamo_errors(self):
+        """Verifies extractor raises RuntimeError if DynamoDB update fails."""
+        event = {
+            "document_id": "doc-test-db-fail",
+            "filename": "invoice.pdf",
+            "s3_bucket": "test-bucket",
+            "s3_key": "uploads/doc-test-db-fail/invoice.pdf"
+        }
+        with patch.object(extractor_app, 'table') as mock_table:
+            with patch.object(extractor_app, 's3_client') as mock_s3:
+                mock_s3.get_object.return_value = {"Body": BytesIO(b"INVOICE\nVendor: AWS\nTotal: $100.00")}
+                mock_table.update_item.side_effect = Exception("DynamoDBUpdateError")
+                with self.assertRaises(RuntimeError) as ctx:
+                    extractor_app.lambda_handler(event, None)
+                self.assertIn("Failed to persist extracted entities to DynamoDB", str(ctx.exception))
+
 if __name__ == '__main__':
     unittest.main()

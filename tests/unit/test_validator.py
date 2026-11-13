@@ -101,5 +101,22 @@ class TestValidator(unittest.TestCase):
             validator_app.lambda_handler(event, None)
         self.assertIn("Unsupported file format", str(ctx.exception))
 
+    def test_validator_fails_closed_when_dynamo_errors(self):
+        """Verifies validator raises RuntimeError if DynamoDB update fails."""
+        event = {
+            "document_id": "test-uuid-fail-db",
+            "s3_bucket": "test-bucket",
+            "s3_key": "uploads/test-uuid-fail-db/invoice.pdf",
+            "filename": "invoice.pdf"
+        }
+        with patch.object(validator_app, 'table') as mock_table:
+            with patch.object(validator_app, 's3_client') as mock_s3:
+                mock_s3.head_object.return_value = {"ContentLength": 1024}
+                mock_s3.get_object.return_value = {"Body": BytesIO(b"%PDF-1.4 sample content")}
+                mock_table.update_item.side_effect = Exception("DynamoDBWriteError")
+                with self.assertRaises(RuntimeError) as ctx:
+                    validator_app.lambda_handler(event, None)
+                self.assertIn("Failed to persist security validation results to DynamoDB", str(ctx.exception))
+
 if __name__ == '__main__':
     unittest.main()

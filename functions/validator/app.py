@@ -109,6 +109,7 @@ def lambda_handler(event, context):
         except Exception:
             pass
 
+    # Persist security scan results to DynamoDB - Fail closed if persistence fails
     try:
         table.update_item(
             Key={"PK": f"DOC#{document_id}", "SK": "METADATA"},
@@ -121,7 +122,7 @@ def lambda_handler(event, context):
             }
         )
     except Exception as e:
-        print(f"DynamoDB update error in validator: {e}")
+        raise RuntimeError(f"Failed to persist security validation results to DynamoDB for document {document_id}: {e}")
 
     output_event = dict(event)
     output_event["security_scan"] = security_info

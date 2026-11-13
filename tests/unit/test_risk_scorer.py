@@ -124,6 +124,36 @@ class TestRiskScorer(unittest.TestCase):
             with self.assertRaises(Exception):
                 risk_scorer_app.review_handler(event, None)
 
+    def test_review_handler_fails_closed_when_sns_publish_errors(self):
+        """Verifies review_handler raises RuntimeError if SNS publish fails."""
+        event = {
+            "document_id": "doc-test-fail-sns",
+            "task_token": "ValidTaskToken==",
+            "risk": {"score": 85, "level": "HIGH"}
+        }
+        with patch.object(risk_scorer_app, 'table'):
+            with patch.dict(os.environ, {"SNS_TOPIC_ARN": "arn:aws:sns:us-east-1:123456789012:test-topic"}):
+                with patch('boto3.client') as mock_boto_client:
+                    mock_sns = MagicMock()
+                    mock_sns.publish.side_effect = Exception("SNSAccessDenied")
+                    mock_boto_client.return_value = mock_sns
+                    with self.assertRaises(RuntimeError) as ctx:
+                        risk_scorer_app.review_handler(event, None)
+                    self.assertIn("Failed to publish high-risk approval alert to SNS topic", str(ctx.exception))
+
+    def test_risk_scorer_fails_closed_when_dynamo_errors(self):
+        """Verifies risk_scorer lambda_handler raises RuntimeError if DynamoDB update fails."""
+        event = {
+            "document_id": "doc-test-risk-db-fail",
+            "extracted_data": {"vendor": "AWS", "grand_total": 100.0, "vendor_trusted": True},
+            "security_scan": {"format_whitelisted": True, "size_within_limits": True}
+        }
+        with patch.object(risk_scorer_app, 'table') as mock_table:
+            mock_table.update_item.side_effect = Exception("DynamoDBUpdateError")
+            with self.assertRaises(RuntimeError) as ctx:
+                risk_scorer_app.lambda_handler(event, None)
+            self.assertIn("Failed to persist risk score to DynamoDB", str(ctx.exception))
+
     def test_notifier_handler(self):
         event = {
             "document_id": "doc-test-4444",
@@ -135,6 +165,19 @@ class TestRiskScorer(unittest.TestCase):
             res = risk_scorer_app.notifier_handler(event, None)
             self.assertEqual(res["statusCode"], 200)
             self.assertEqual(res["final_status"], "APPROVED")
+
+    def test_notifier_handler_fails_closed_when_dynamo_errors(self):
+        """Verifies notifier_handler raises RuntimeError if DynamoDB update fails."""
+        event = {
+            "document_id": "doc-test-notifier-fail",
+            "status": "APPROVED",
+            "decision": "AUTO_APPROVED"
+        }
+        with patch.object(risk_scorer_app, 'table') as mock_table:
+            mock_table.update_item.side_effect = Exception("DynamoDBWriteError")
+            with self.assertRaises(RuntimeError) as ctx:
+                risk_scorer_app.notifier_handler(event, None)
+            self.assertIn("Failed to persist final document status to DynamoDB", str(ctx.exception))
 
     def test_notifier_handler_callback_path(self):
         # Emulates sendTaskSuccess callback: reviewer + notes, no 'message' field

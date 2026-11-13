@@ -139,6 +139,7 @@ def lambda_handler(event, context):
         except Exception:
             pass
 
+    # Persist risk evaluation to DynamoDB - Fail closed if persistence fails
     try:
         table.update_item(
             Key={"PK": f"DOC#{document_id}", "SK": "METADATA"},
@@ -151,7 +152,7 @@ def lambda_handler(event, context):
             }
         )
     except Exception as e:
-        print(f"DynamoDB update error in risk_scorer: {e}")
+        raise RuntimeError(f"Failed to persist risk score to DynamoDB for document {document_id}: {e}")
 
     # Build merged output: preserve top-level metadata and merge parallel branches
     output_event = dict(event) if isinstance(event, dict) else {}
@@ -196,7 +197,7 @@ def review_handler(event, context):
     )
     print(f"Stored task token for document {document_id}; Step Functions paused.")
 
-    # Also notify administrators via SNS topic if configured
+    # Notify administrators via SNS topic - Fail closed if publish fails
     sns_topic_arn = os.environ.get("SNS_TOPIC_ARN")
     if sns_topic_arn:
         try:
@@ -206,7 +207,7 @@ def review_handler(event, context):
                 Message=f"DocuFlow AI Anomaly Flag: Invoice {document_id} has Risk Score {risk.get('score', 'HIGH')}. Review in dashboard or call /api/documents/{document_id}/approve."
             )
         except Exception as e:
-            print(f"SNS publish note in review_handler: {e}")
+            raise RuntimeError(f"Failed to publish high-risk approval alert to SNS topic {sns_topic_arn}: {e}")
 
     return {
         "statusCode": 200,
@@ -248,7 +249,7 @@ def notifier_handler(event, context):
             }
         )
     except Exception as e:
-        print(f"DynamoDB update error in notifier: {e}")
+        raise RuntimeError(f"Failed to persist final document status to DynamoDB for document {document_id}: {e}")
 
     print(f"DISPATCHED EVENT: Document {document_id} finalized with {final_status} ({decision})")
 
