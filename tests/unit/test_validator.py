@@ -101,6 +101,57 @@ class TestValidator(unittest.TestCase):
             validator_app.lambda_handler(event, None)
         self.assertIn("Unsupported file format", str(ctx.exception))
 
+    def test_file_signature_spoofing_fails_closed(self):
+        """Verifies validator detects file spoofing: .pdf extension with non-PDF magic bytes is rejected."""
+        event = {
+            "document_id": "test-uuid-spoof",
+            "s3_bucket": "test-bucket",
+            "s3_key": "uploads/test-uuid-spoof/fake.pdf",
+            "filename": "fake.pdf"
+        }
+        with patch.object(validator_app, 'table'):
+            with patch.object(validator_app, 's3_client') as mock_s3:
+                mock_s3.head_object.return_value = {"ContentLength": 512}
+                # Spoofed payload: claimed to be PDF, but actually shell script text
+                mock_s3.get_object.return_value = {"Body": BytesIO(b"#!/bin/bash\nrm -rf /")}
+                with self.assertRaises(ValueError) as ctx:
+                    validator_app.lambda_handler(event, None)
+                self.assertIn("File signature mismatch", str(ctx.exception))
+
+    def test_png_magic_byte_signature_verification(self):
+        """Verifies valid PNG binary header signature passes magic-byte check."""
+        event = {
+            "document_id": "test-uuid-png",
+            "s3_bucket": "test-bucket",
+            "s3_key": "uploads/test-uuid-png/scan.png",
+            "filename": "scan.png"
+        }
+        with patch.object(validator_app, 'table'):
+            with patch.object(validator_app, 's3_client') as mock_s3:
+                mock_s3.head_object.return_value = {"ContentLength": 1024}
+                mock_s3.get_object.return_value = {"Body": BytesIO(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRmock_png_data")}
+                result = validator_app.lambda_handler(event, None)
+                sec = result["security_scan"]
+                self.assertTrue(sec["magic_bytes_verified"])
+                self.assertIn("image/png", sec["signature_description"])
+
+    def test_jpeg_magic_byte_signature_verification(self):
+        """Verifies valid JPEG binary header signature passes magic-byte check."""
+        event = {
+            "document_id": "test-uuid-jpeg",
+            "s3_bucket": "test-bucket",
+            "s3_key": "uploads/test-uuid-jpeg/receipt.jpg",
+            "filename": "receipt.jpg"
+        }
+        with patch.object(validator_app, 'table'):
+            with patch.object(validator_app, 's3_client') as mock_s3:
+                mock_s3.head_object.return_value = {"ContentLength": 1024}
+                mock_s3.get_object.return_value = {"Body": BytesIO(b"\xff\xd8\xff\xe0\x00\x10JFIFmock_jpeg_data")}
+                result = validator_app.lambda_handler(event, None)
+                sec = result["security_scan"]
+                self.assertTrue(sec["magic_bytes_verified"])
+                self.assertIn("image/jpeg", sec["signature_description"])
+
     def test_validator_fails_closed_when_dynamo_errors(self):
         """Verifies validator raises RuntimeError if DynamoDB update fails."""
         event = {

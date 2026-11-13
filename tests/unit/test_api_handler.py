@@ -345,5 +345,122 @@ class TestApiHandler(unittest.TestCase):
             self.assertEqual(len(data["documents"]), 1)
             self.assertNotIn("task_token", data["documents"][0])
 
+    def test_list_and_get_documents_unauthorized_when_api_key_configured(self):
+        """Verifies read endpoints (list & get) return 401 Unauthorized if DOCUFLOW_API_KEY is configured."""
+        event_list = {
+            "routeKey": "GET /api/documents",
+            "requestContext": {"http": {"method": "GET"}}
+        }
+        event_get = {
+            "routeKey": "GET /api/documents/doc-12345",
+            "pathParameters": {"id": "doc-12345"},
+            "requestContext": {"http": {"method": "GET"}}
+        }
+        with patch.object(api_handler_app, 'DOCUFLOW_API_KEY', 'secret-admin-key-999'):
+            res_list = api_handler_app.lambda_handler(event_list, None)
+            self.assertEqual(res_list["statusCode"], 401)
+            data_list = json.loads(res_list["body"])
+            self.assertIn("Unauthorized", data_list["error"])
+
+            res_get = api_handler_app.lambda_handler(event_get, None)
+            self.assertEqual(res_get["statusCode"], 401)
+            data_get = json.loads(res_get["body"])
+            self.assertIn("Unauthorized", data_get["error"])
+
+    def test_list_documents_fails_closed_when_both_query_and_scan_error(self):
+        """Verifies list endpoint returns HTTP 500 when DynamoDB query and scan both fail."""
+        event_list = {
+            "routeKey": "GET /api/documents",
+            "requestContext": {"http": {"method": "GET"}}
+        }
+        with patch.object(api_handler_app, 'table') as mock_table:
+            mock_table.query.side_effect = Exception("DynamoDBQueryOutage")
+            mock_table.scan.side_effect = Exception("DynamoDBScanOutage")
+            res = api_handler_app.lambda_handler(event_list, None)
+            self.assertEqual(res["statusCode"], 500)
+            data = json.loads(res["body"])
+            self.assertIn("Failed to retrieve documents from DynamoDB", data["error"])
+
+    def test_process_document_fails_closed_when_dynamo_read_errors(self):
+        """Verifies process endpoint returns HTTP 500 when DynamoDB get throws, without guessing S3 keys."""
+        event = {
+            "routeKey": "POST /api/documents/doc-db-err/process",
+            "pathParameters": {"id": "doc-db-err"},
+            "requestContext": {"http": {"method": "POST"}}
+        }
+        with patch.object(api_handler_app, 'table') as mock_table:
+            mock_table.get_item.side_effect = Exception("DynamoDBConnectionTimeout")
+            with patch.object(api_handler_app, 's3_client') as mock_s3:
+                res = api_handler_app.lambda_handler(event, None)
+                self.assertEqual(res["statusCode"], 500)
+                data = json.loads(res["body"])
+                self.assertIn("Database read failure", data["error"])
+                mock_s3.head_object.assert_not_called()
+
+    def test_process_document_not_found_returns_404_without_guessing_s3_key(self):
+        """Verifies process endpoint returns HTTP 404 when document record does not exist."""
+        event = {
+            "routeKey": "POST /api/documents/doc-not-found/process",
+            "pathParameters": {"id": "doc-not-found"},
+            "requestContext": {"http": {"method": "POST"}}
+        }
+        with patch.object(api_handler_app, 'table') as mock_table:
+            mock_table.get_item.return_value = {} # Record not found
+            with patch.object(api_handler_app, 's3_client') as mock_s3:
+                res = api_handler_app.lambda_handler(event, None)
+                self.assertEqual(res["statusCode"], 404)
+                data = json.loads(res["body"])
+                self.assertIn("not found in database", data["error"])
+                mock_s3.head_object.assert_not_called()
+
+    def test_upload_url_generation_rejects_oversized_declared_size(self):
+        """Verifies upload-url endpoint rejects declared file sizes exceeding 10MB before issuing presigned URL."""
+        event = {
+            "routeKey": "POST /api/upload-url",
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({
+                "filename": "huge_invoice.pdf",
+                "file_size": 25 * 1024 * 1024 # 25MB
+            })
+        }
+        with patch.object(api_handler_app, 's3_client') as mock_s3:
+            res = api_handler_app.lambda_handler(event, None)
+            self.assertEqual(res["statusCode"], 400)
+            data = json.loads(res["body"])
+            self.assertIn("exceeds maximum allowable limit", data["error"])
+            mock_s3.generate_presigned_url.assert_not_called()
+
+    def test_upload_url_generation_rejects_unsupported_extension(self):
+        """Verifies upload-url endpoint rejects unsupported file formats upfront."""
+        event = {
+            "routeKey": "POST /api/upload-url",
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({"filename": "exploit.sh"})
+        }
+        with patch.object(api_handler_app, 's3_client') as mock_s3:
+            res = api_handler_app.lambda_handler(event, None)
+            self.assertEqual(res["statusCode"], 400)
+            data = json.loads(res["body"])
+            self.assertIn("Unsupported file extension", data["error"])
+            mock_s3.generate_presigned_url.assert_not_called()
+
+    def test_upload_url_generation_signs_content_length_when_declared(self):
+        """Verifies presigned URL includes ContentLength parameter for upload-time S3 enforcement."""
+        event = {
+            "routeKey": "POST /api/upload-url",
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({
+                "filename": "valid_invoice.pdf",
+                "file_size": 45000
+            })
+        }
+        with patch.object(api_handler_app, 'table'):
+            with patch.object(api_handler_app, 's3_client') as mock_s3:
+                mock_s3.generate_presigned_url.return_value = "https://s3.amazonaws.com/uploads/xyz/valid_invoice.pdf"
+                res = api_handler_app.lambda_handler(event, None)
+                self.assertEqual(res["statusCode"], 201)
+                call_args = mock_s3.generate_presigned_url.call_args[1]
+                self.assertEqual(call_args["Params"]["ContentLength"], 45000)
+
 if __name__ == '__main__':
     unittest.main()

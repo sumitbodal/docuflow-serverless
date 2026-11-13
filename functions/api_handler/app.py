@@ -36,6 +36,7 @@ except ImportError:
         pass
 
 MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024 # 10 MB
+ALLOWED_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg', '.txt'}
 
 def build_response(status_code: int, body: dict):
     return {
@@ -117,14 +118,41 @@ def handle_get_upload_url(event):
     s3_key = f"uploads/{document_id}/{filename}"
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
+    # Upfront format validation
+    _, ext = os.path.splitext(filename.lower())
+    if ext and ext not in ALLOWED_EXTENSIONS:
+        return build_response(400, {
+            "error": f"Unsupported file extension '{ext}'. Allowed formats: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+        })
+
+    # Upfront upload size limit validation
+    declared_size = body.get("file_size") or body.get("content_length")
+    put_params = {
+        'Bucket': DOCS_BUCKET_NAME,
+        'Key': s3_key,
+        'ContentType': content_type
+    }
+    if declared_size is not None:
+        try:
+            declared_size = int(declared_size)
+        except (ValueError, TypeError):
+            return build_response(400, {"error": "file_size must be a valid integer."})
+
+        if declared_size <= 0:
+            return build_response(400, {"error": "Declared file_size must be greater than 0 bytes."})
+
+        if declared_size > MAX_UPLOAD_SIZE_BYTES:
+            return build_response(400, {
+                "error": f"Declared file size ({declared_size} bytes) exceeds maximum allowable limit of {MAX_UPLOAD_SIZE_BYTES} bytes (10MB). Presigned URL denied."
+            })
+
+        # Sign ContentLength into presigned URL params so S3 enforces it at the upload boundary
+        put_params['ContentLength'] = declared_size
+
     try:
         presigned_url = s3_client.generate_presigned_url(
             'put_object',
-            Params={
-                'Bucket': DOCS_BUCKET_NAME,
-                'Key': s3_key,
-                'ContentType': content_type
-            },
+            Params=put_params,
             ExpiresIn=900
         )
     except Exception as e:
@@ -144,10 +172,13 @@ def handle_get_upload_url(event):
         "s3_bucket": DOCS_BUCKET_NAME,
         "s3_key": s3_key,
         "content_type": content_type,
+        "max_size_bytes": MAX_UPLOAD_SIZE_BYTES,
         "status": "UPLOAD_PENDING",
         "created_at": now_iso,
         "updated_at": now_iso
     }
+    if declared_size is not None:
+        item["declared_size_bytes"] = declared_size
 
     try:
         table.put_item(Item=decimal_serialize(item))
@@ -163,6 +194,7 @@ def handle_get_upload_url(event):
         "upload_url": presigned_url,
         "s3_bucket": DOCS_BUCKET_NAME,
         "s3_key": s3_key,
+        "max_size_bytes": MAX_UPLOAD_SIZE_BYTES,
         "status": "UPLOAD_PENDING",
         "message": "Presigned URL generated. Upload document to S3, then trigger processing."
     })
@@ -177,23 +209,31 @@ def handle_process_document(event, document_id):
             "error": "Unauthorized: A valid Authorization header or API key is required to trigger document processing."
         })
 
-    # 1. Fetch document metadata
-    doc = None
+    # 1. Fetch document metadata - Fail closed on DB read failure or missing record (no guessing)
     try:
         res = table.get_item(Key={"PK": f"DOC#{document_id}", "SK": "METADATA"})
         doc = res.get("Item")
     except Exception as e:
-        print(f"DynamoDB get error: {e}")
+        print(f"DynamoDB get error for document {document_id}: {e}")
+        return build_response(500, {
+            "error": f"Database read failure: Unable to retrieve document record from DynamoDB: {str(e)}",
+            "document_id": document_id
+        })
 
     if not doc:
-        # Create minimal record if triggered directly from S3 event
-        s3_key = f"uploads/{document_id}/document.pdf"
-        s3_bucket = DOCS_BUCKET_NAME
-        filename = "document.pdf"
-    else:
-        s3_key = doc.get("s3_key")
-        s3_bucket = doc.get("s3_bucket", DOCS_BUCKET_NAME)
-        filename = doc.get("filename", "document.pdf")
+        return build_response(404, {
+            "error": f"Document '{document_id}' not found in database. An upload URL must be requested before processing.",
+            "document_id": document_id
+        })
+
+    s3_key = doc.get("s3_key")
+    s3_bucket = doc.get("s3_bucket", DOCS_BUCKET_NAME)
+    filename = doc.get("filename", "document.pdf")
+    if not s3_key:
+        return build_response(400, {
+            "error": f"Document record '{document_id}' is missing required 's3_key' metadata.",
+            "document_id": document_id
+        })
 
     # 2. FAIL CLOSED: Verify object exists on S3 and enforce size limit before triggering Step Functions
     try:
@@ -311,6 +351,10 @@ def sanitize_document_record(item: dict) -> dict:
     return sanitized
 
 def handle_list_documents(event):
+    if not is_authorized(event):
+        return build_response(401, {
+            "error": "Unauthorized: A valid Authorization token or API key is required to list documents."
+        })
     items = []
     try:
         response = table.query(
@@ -320,25 +364,37 @@ def handle_list_documents(event):
             Limit=50
         )
         items = response.get("Items", [])
-    except Exception as e:
+    except Exception as query_err:
+        print(f"DynamoDB query failed, attempting scan fallback: {query_err}")
         try:
             scan_res = table.scan(Limit=50)
             items = scan_res.get("Items", [])
-        except Exception:
-            items = []
+        except Exception as scan_err:
+            print(f"DynamoDB scan fallback also failed: {scan_err}")
+            return build_response(500, {
+                "error": f"Failed to retrieve documents from DynamoDB: {str(scan_err)}"
+            })
 
     sanitized_items = [sanitize_document_record(i) for i in items]
     return build_response(200, {"count": len(sanitized_items), "documents": sanitized_items})
 
 def handle_get_document(event, document_id):
+    if not is_authorized(event):
+        return build_response(401, {
+            "error": "Unauthorized: A valid Authorization token or API key is required to view document details."
+        })
     try:
         res = table.get_item(Key={"PK": f"DOC#{document_id}", "SK": "METADATA"})
         item = res.get("Item")
         if not item:
-            return build_response(404, {"error": "Document not found"})
+            return build_response(404, {"error": f"Document '{document_id}' not found."})
         return build_response(200, sanitize_document_record(item))
     except Exception as e:
-        return build_response(500, {"error": str(e)})
+        print(f"DynamoDB get_item error for document {document_id}: {e}")
+        return build_response(500, {
+            "error": f"Failed to retrieve document record from DynamoDB: {str(e)}",
+            "document_id": document_id
+        })
 
 def handle_approve_document(event, document_id):
     """
@@ -364,13 +420,16 @@ def handle_approve_document(event, document_id):
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     new_status = "APPROVED" if action == "APPROVE" else "REJECTED"
 
-    # 1. Fetch document record from DynamoDB to check existence and state
-    item = None
+    # 1. Fetch document record from DynamoDB to check existence and state - Fail closed on DB error
     try:
         res = table.get_item(Key={"PK": f"DOC#{document_id}", "SK": "METADATA"})
         item = res.get("Item")
     except Exception as e:
         print(f"Error reading document from DynamoDB: {e}")
+        return build_response(500, {
+            "error": f"Database read failure: Unable to retrieve document record for approval: {str(e)}",
+            "document_id": document_id
+        })
 
     if not item:
         return build_response(404, {"error": f"Document '{document_id}' not found"})

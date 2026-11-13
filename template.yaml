@@ -8,11 +8,12 @@ Parameters:
   ReviewerEmail:
     Type: String
     Default: 'reviewer@example.com'
-    Description: Email address for high-risk document review and approval notifications.
+    Description: Email address for high-risk document review and approval notifications. IMPORTANT: Check your inbox and click 'Confirm Subscription' in the AWS SNS verification email after deploy.
   DocuFlowApiKey:
     Type: String
-    Default: 'docuflow-secure-admin-token-2026'
-    Description: Secret API key required for DocuFlow mutating endpoints (upload, process, approve).
+    NoEcho: true
+    Default: ''
+    Description: Optional secret API key for DocuFlow endpoints. For enterprise production, leave empty and configure Amazon Cognito User Pool Authorizer.
 
 Globals:
   Function:

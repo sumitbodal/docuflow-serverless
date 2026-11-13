@@ -118,12 +118,17 @@ Deploy the complete serverless stack with a single command:
 sam build
 sam deploy --guided
 ```
-SAM will provision the S3 buckets, DynamoDB table, API Gateway, Lambda functions, and Step Functions state machine automatically.
+SAM will provision the S3 buckets, DynamoDB table, API Gateway, Lambda functions, SNS topic with subscription, and Step Functions state machine automatically.
+
+> [!IMPORTANT]
+> **SNS Reviewer Confirmation Required**: Immediately after deployment, AWS SNS sends an **"AWS Notification - Subscription Confirmation"** email to the configured `ReviewerEmail`. The recipient must click **"Confirm Subscription"** in that email before Amazon SNS will deliver high-risk invoice approval alerts.
 
 ### 2. Deploy Web Dashboard to S3
 ```bash
-aws s3 sync frontend/ s3://<DocuFlowFrontendBucketName>/ --acl public-read
+aws s3 sync frontend/ s3://<DocuFlowFrontendBucketName>/
 ```
+*(Note: Do not supply `--acl public-read`. Modern S3 buckets disable ACLs by default; public website access is already managed cleanly by the bucket policy.)*
+
 Open the Output `WebDashboardUrl` in your browser.
 
 ---

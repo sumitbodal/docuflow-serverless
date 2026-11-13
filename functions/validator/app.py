@@ -23,6 +23,31 @@ table = dynamodb.Table(TABLE_NAME)
 ALLOWED_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg'}
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 # 10 MB
 
+def validate_file_signature(content_bytes: bytes, ext: str) -> tuple[bool, str]:
+    """
+    Validates file magic numbers / binary header signatures to verify that
+    the payload format matches the declared extension (anti-spoofing guard).
+    """
+    if not content_bytes:
+        return False, "File payload is empty"
+
+    if ext == ".pdf":
+        if content_bytes.startswith(b"%PDF-"):
+            return True, "application/pdf (Magic bytes '%PDF-' verified)"
+        return False, "File signature mismatch: Declared as .pdf but lacks '%PDF-' magic bytes"
+
+    elif ext == ".png":
+        if content_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            return True, "image/png (Magic bytes verified)"
+        return False, "File signature mismatch: Declared as .png but lacks PNG header bytes"
+
+    elif ext in (".jpg", ".jpeg"):
+        if content_bytes.startswith(b"\xff\xd8\xff"):
+            return True, "image/jpeg (Magic bytes verified)"
+        return False, "File signature mismatch: Declared as JPEG but lacks JPEG SOI marker bytes"
+
+    return False, f"Unsupported file extension: {ext}"
+
 try:
     from utils import decimal_serialize
 except ImportError:
@@ -84,16 +109,23 @@ def lambda_handler(event, context):
     except Exception as e:
         raise FileNotFoundError(f"Failed to read S3 document bytes for s3://{s3_bucket}/{s3_key}: {e}")
 
+    # Verify binary file signature / magic bytes against declared extension (anti-spoofing)
+    sig_valid, sig_msg = validate_file_signature(content_bytes, ext)
+    if not sig_valid:
+        raise ValueError(f"Security validation failed: {sig_msg}")
+
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     security_info = {
         "status": "VALIDATED",
         "file_size_bytes": int(file_size),
         "extension": ext,
+        "magic_bytes_verified": True,
+        "signature_description": sig_msg,
         "sha256": file_sha256,
         "sha256_computed": True,
         "format_whitelisted": True,
         "size_within_limits": True,
-        "check_scope": "Cryptographic SHA-256 Digest Computation, Size Bounds & Extension Whitelist (No Anti-Malware / Prior Hash Matching)",
+        "check_scope": "Cryptographic SHA-256 Digest Computation, Binary Magic-Byte File Signature Verification, Size Bounds & Extension Whitelist (Note: No Trusted Hash Database Matching or Anti-Malware Engine)",
         "validated_at": now_iso
     }
 

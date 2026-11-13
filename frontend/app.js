@@ -183,12 +183,25 @@ async function handleFileUpload(file) {
     stepUpload.className = "step-item running";
     stepUpload.querySelector(".step-status").innerText = "🔄";
 
+    if (file.size > 10 * 1024 * 1024) {
+      markError(stepUpload, `File size (${(file.size / 1024 / 1024).toFixed(1)}MB) exceeds maximum allowable limit of 10MB.`);
+      return;
+    }
+    if (file.size === 0) {
+      markError(stepUpload, "Cannot upload empty file (0 bytes).");
+      return;
+    }
+
     try {
-      // 1. Get presigned upload URL from API Gateway
+      // 1. Get presigned upload URL from API Gateway (enforces size limit before presigning)
       const presignRes = await fetch(`${API_BASE_URL}/api/upload-url`, {
         method: "POST",
         headers: getAuthHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ filename: file.name, content_type: file.type || "application/pdf" })
+        body: JSON.stringify({
+          filename: file.name,
+          content_type: file.type || "application/pdf",
+          file_size: file.size
+        })
       });
       if (!presignRes.ok) {
         const errJson = await presignRes.json().catch(() => ({}));
