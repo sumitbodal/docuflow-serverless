@@ -1,0 +1,266 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  DocuFlow AI - Resilient Serverless Document & Invoice Intelligence Engine
+  AWS Builder Center 'No Pipeline, No Problem' Weekend Challenge Submission
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: python3.12
+    Tracing: Active
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref DocuFlowTable
+        DOCS_BUCKET_NAME: !Ref DocuFlowStorageBucket
+        LOG_LEVEL: INFO
+
+Resources:
+  # ============================================================================
+  # 1. STORAGE: Amazon S3 Buckets (Documents & Frontend Hosting)
+  # ============================================================================
+  DocuFlowStorageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'docuflow-docs-${AWS::AccountId}-${AWS::Region}'
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET, PUT, POST, HEAD]
+            AllowedOrigins: ['*']
+            MaxAge: 3600
+
+  DocuFlowFrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'docuflow-web-${AWS::AccountId}-${AWS::Region}'
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  DocuFlowFrontendPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DocuFlowFrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PublicReadForWebsite
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Sub '${DocuFlowFrontendBucket.Arn}/*'
+
+  # ============================================================================
+  # 2. PERSISTENCE: Amazon DynamoDB (Single-Table Design)
+  # ============================================================================
+  DocuFlowTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: DocuFlowRecords
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: TTL
+        Enabled: true
+
+  # ============================================================================
+  # 3. API GATEWAY: Amazon API Gateway (HTTP API v2)
+  # ============================================================================
+  DocuFlowHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins: ['*']
+        AllowHeaders: ['*']
+        AllowMethods: [GET, POST, OPTIONS]
+        MaxAge: 600
+
+  # ============================================================================
+  # 4. COMPUTE: AWS Lambda Functions
+  # ============================================================================
+  ApiHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/api_handler/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          STATE_MACHINE_ARN: !Ref DocuFlowStateMachine
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DocuFlowTable
+        - S3CrudPolicy:
+            BucketName: !Ref DocuFlowStorageBucket
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt DocuFlowStateMachine.Name
+        - Statement:
+            - Effect: Allow
+              Action:
+                - states:SendTaskSuccess
+                - states:SendTaskFailure
+              Resource: '*'
+      Events:
+        GetUploadUrl:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DocuFlowHttpApi
+            Path: /api/upload-url
+            Method: post
+        ProcessDoc:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DocuFlowHttpApi
+            Path: /api/documents/{id}/process
+            Method: post
+        ListDocs:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DocuFlowHttpApi
+            Path: /api/documents
+            Method: get
+        GetDoc:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DocuFlowHttpApi
+            Path: /api/documents/{id}
+            Method: get
+        ApproveDoc:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DocuFlowHttpApi
+            Path: /api/documents/{id}/approve
+            Method: post
+
+  ValidatorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/validator/
+      Handler: app.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DocuFlowTable
+        - S3ReadPolicy:
+            BucketName: !Ref DocuFlowStorageBucket
+
+  ExtractorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/extractor/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          BEDROCK_MODEL_ID: 'anthropic.claude-3-haiku-20240307-v1:0'
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DocuFlowTable
+        - S3ReadPolicy:
+            BucketName: !Ref DocuFlowStorageBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+                - bedrock:InvokeModelWithResponseStream
+              Resource: '*'
+
+  RiskScorerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/risk_scorer/
+      Handler: app.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DocuFlowTable
+
+  # ============================================================================
+  # 5. MESSAGING: Amazon Simple Notification Service (SNS)
+  # ============================================================================
+  DocuFlowNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'docuflow-alerts-${AWS::AccountId}-${AWS::Region}'
+      DisplayName: DocuFlow AI Real-time Enterprise Alert & Approval Topic
+
+  # ============================================================================
+  # 6. ORCHESTRATION: AWS Step Functions State Machine (Direct SDK Integrations)
+  # ============================================================================
+  DocuFlowStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: DocuFlowOrchestrationStateMachine
+      DefinitionUri: statemachine/docuflow.asl.json
+      Tracing:
+        Enabled: true
+      DefinitionSubstitutions:
+        ValidatorFunctionArn: !GetAtt ValidatorFunction.Arn
+        ExtractorFunctionArn: !GetAtt ExtractorFunction.Arn
+        RiskScorerFunctionArn: !GetAtt RiskScorerFunction.Arn
+        DocuFlowNotificationTopicArn: !Ref DocuFlowNotificationTopic
+        DocuFlowTableName: !Ref DocuFlowTable
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ValidatorFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ExtractorFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref RiskScorerFunction
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DocuFlowTable
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt DocuFlowNotificationTopic.TopicName
+
+Outputs:
+  HttpApiUrl:
+    Description: HTTP API Gateway endpoint URL
+    Value: !Sub 'https://${DocuFlowHttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+
+  WebDashboardUrl:
+    Description: S3 Static Website Hosting URL for UI
+    Value: !GetAtt DocuFlowFrontendBucket.WebsiteURL
+
+  DocumentsBucket:
+    Description: S3 Documents Ingestion Bucket
+    Value: !Ref DocuFlowStorageBucket
+
+  StateMachineArn:
+    Description: Step Functions State Machine ARN
+    Value: !Ref DocuFlowStateMachine
+
+  NotificationTopicArn:
+    Description: Amazon SNS Alert & Approval Topic ARN
+    Value: !Ref DocuFlowNotificationTopic
+
+  FrontendBucketName:
+    Description: S3 Static Website Hosting Bucket Name
+    Value: !Ref DocuFlowFrontendBucket

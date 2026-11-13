@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DocuFlow AI — Serverless Document Intelligence Engine</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+  <!-- Header -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo-badge">⚡</div>
+      <div class="brand-text">
+        <h1>DocuFlow AI</h1>
+        <span class="subtext">Serverless Multi-Modal Document Intelligence Engine</span>
+      </div>
+    </div>
+    <div class="topbar-meta">
+      <div class="hackathon-tag">
+        <span class="pill-dot"></span>
+        AWS Builder Center: No Pipeline, No Problem
+      </div>
+      <div class="config-trigger" id="configTrigger">⚙️ API Config</div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="container">
+    <!-- Architecture Visualizer Ribbon -->
+    <section class="card arch-ribbon">
+      <div class="ribbon-title">
+        <span>🏗️ Resilient Serverless Pipeline (Parallel Fan-Out &amp; Human-in-the-Loop Callback)</span>
+        <span class="badge-zero">Scale-to-Zero Compute</span>
+      </div>
+      <div class="pipeline-track">
+        <div class="pipe-node active" id="node-s3">
+          <div class="node-icon">🪣</div>
+          <div class="node-label">Amazon S3</div>
+          <div class="node-desc">Presigned Ingest</div>
+        </div>
+        <div class="pipe-arrow">➜</div>
+        <div class="pipe-node" id="node-apigw">
+          <div class="node-icon">🚪</div>
+          <div class="node-label">API Gateway</div>
+          <div class="node-desc">HTTP v2 Endpoint</div>
+        </div>
+        <div class="pipe-arrow">➜</div>
+        <div class="pipe-node" id="node-sfn">
+          <div class="node-icon">⚙️</div>
+          <div class="node-label">Step Functions</div>
+          <div class="node-desc">Parallel State</div>
+        </div>
+        <div class="pipe-arrow">➜</div>
+        <div class="pipe-node" id="node-bedrock">
+          <div class="node-icon">🤖</div>
+          <div class="node-label">Amazon Bedrock</div>
+          <div class="node-desc">Serverless LLM</div>
+        </div>
+        <div class="pipe-arrow">➜</div>
+        <div class="pipe-node" id="node-lambda">
+          <div class="node-icon">λ</div>
+          <div class="node-label">AWS Lambda</div>
+          <div class="node-desc">Parallel Compute</div>
+        </div>
+        <div class="pipe-arrow">➜</div>
+        <div class="pipe-node" id="node-dynamo">
+          <div class="node-icon">🗄️</div>
+          <div class="node-label">DynamoDB SDK</div>
+          <div class="node-desc">Direct ASL Put/Update</div>
+        </div>
+        <div class="pipe-arrow">➜</div>
+        <div class="pipe-node" id="node-sns">
+          <div class="node-icon">📢</div>
+          <div class="node-label">Amazon SNS</div>
+          <div class="node-desc">Direct ASL Publish</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Upload & Quick Sample Section -->
+    <section class="grid-2col">
+      <!-- File Upload Box -->
+      <div class="card">
+        <h2>📄 Document Ingestion</h2>
+        <p class="section-desc">Upload invoices directly to S3 via secure Presigned URLs. Execution triggers post-upload.</p>
+        
+        <div class="dropzone" id="dropzone">
+          <div class="drop-icon">📤</div>
+          <p><strong>Drag &amp; drop PDF / image invoices here</strong></p>
+          <span class="subtext">or click to browse from device</span>
+          <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.txt" style="display: none;">
+        </div>
+
+        <div class="quick-samples">
+          <span class="subtext">Quick Test Presets (Inspect Content &amp; Heuristics):</span>
+          <div class="preset-buttons">
+            <button class="btn-preset" data-preset="aws">☁️ AWS Cloud Invoice ($1,420.50 — Verified Vendor)</button>
+            <button class="btn-preset" data-preset="github">🐙 GitHub Enterprise ($399.00 — Verified Vendor)</button>
+            <button class="btn-preset risk" data-preset="fraud">⚠️ Offshore Shadow Vendor ($89,500.00 — Triggers TaskToken Review)</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Execution Log & Active Pipeline Tracker -->
+      <div class="card">
+        <h2>📊 Real-time Step Functions Execution</h2>
+        <p class="section-desc">Inspect state machine states: Parallel execution, risk scoring &amp; task token pause.</p>
+        
+        <div class="execution-stepper" id="executionStepper">
+          <div class="step-item" id="step-upload">
+            <div class="step-status">⏳</div>
+            <div class="step-info">
+              <strong>1. S3 Presigned Upload &amp; Verification</strong>
+              <span>Direct client-to-bucket upload; verified before workflow start</span>
+            </div>
+          </div>
+          <div class="step-item" id="step-parallel">
+            <div class="step-status">⏳</div>
+            <div class="step-info">
+              <strong>2. ParallelAnalysis (Concurrent Execution)</strong>
+              <span>Branch A: Entity Extraction (OCR) ⨂ Branch B: Security &amp; Compliance Scan</span>
+            </div>
+          </div>
+          <div class="step-item" id="step-score">
+            <div class="step-status">⏳</div>
+            <div class="step-info">
+              <strong>3. CalculateRiskScore</strong>
+              <span>Merges parallel branches; evaluates vendor registry &amp; amount thresholds</span>
+            </div>
+          </div>
+          <div class="step-item" id="step-choice">
+            <div class="step-status">⏳</div>
+            <div class="step-info">
+              <strong>4. EvaluateRiskDecision &amp; TaskToken</strong>
+              <span>Score &ge; 70 suspends workflow in waitForTaskToken awaiting API callback</span>
+            </div>
+          </div>
+          <div class="step-item" id="step-dispatch">
+            <div class="step-status">⏳</div>
+            <div class="step-info">
+              <strong>5. Direct SDK: DynamoDB updateItem &amp; SNS Publish</strong>
+              <span>Zero-Lambda dispatch: directly commits audit state to DynamoDB &amp; publishes SNS notification</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Documents Audit Table -->
+    <section class="card">
+      <div class="table-header-row">
+        <div>
+          <h2>📑 Ingested Invoices &amp; Audit Trail</h2>
+          <p class="section-desc">Live records synced with Amazon DynamoDB single-table schema.</p>
+        </div>
+        <button class="btn-primary" id="refreshBtn">🔄 Refresh Table</button>
+      </div>
+
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Document ID</th>
+              <th>Filename</th>
+              <th>Vendor</th>
+              <th>Amount</th>
+              <th>Risk Score</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="documentsTbody">
+            <!-- Dynamically populated -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- Document Details & Review Modal -->
+  <div class="modal-backdrop" id="modalBackdrop">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="modalTitle">Document Details</h3>
+        <button class="close-btn" id="modalClose">✕</button>
+      </div>
+      <div class="modal-body" id="modalBody">
+        <!-- Content inserted dynamically -->
+      </div>
+      <div class="modal-footer" id="modalFooter">
+        <!-- Actions inserted dynamically -->
+      </div>
+    </div>
+  </div>
+
+  <!-- API Settings Modal -->
+  <div class="modal-backdrop" id="configModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>⚙️ Endpoint Configuration</h3>
+        <button class="close-btn" id="configClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <label for="apiUrlInput"><strong>AWS API Gateway Base URL:</strong></label>
+        <input type="text" id="apiUrlInput" class="text-input" placeholder="https://xxxx.execute-api.us-east-1.amazonaws.com">
+        <p class="subtext">Leave empty to run in local interactive simulation mode (ideal for offline review &amp; instant demo testing).</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary" id="saveConfigBtn">Save &amp; Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

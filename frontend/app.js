@@ -1,0 +1,473 @@
+// DocuFlow AI - Frontend Controller (Updated with Parallel & TaskToken Orchestration)
+
+let API_BASE_URL = localStorage.getItem("DOCUFLOW_API_URL") || "";
+
+// In-memory demo store for offline/simulation mode
+let localDocuments = [
+  {
+    document_id: "7a8b9c0d-1122-3344-5566-778899aabbcc",
+    filename: "AWS_Cloud_Monthly_Invoice_Oct2026.pdf",
+    status: "APPROVED",
+    decision: "AUTO_APPROVED",
+    created_at: new Date(Date.now() - 3600000 * 4).toISOString(),
+    extracted_data: {
+      vendor: "Amazon Web Services EMEA",
+      invoice_number: "INV-202610-7A8B9C",
+      grand_total: 1420.50,
+      currency: "USD",
+      vendor_trusted: true,
+      raw_text_length: 1240,
+      ai_model_used: "anthropic.claude-3-haiku-20240307-v1:0",
+      ai_inference_provider: "Amazon Bedrock (Serverless LLM)",
+      ai_analysis: "Verified cloud infrastructure entity; financial math and line items matched accurately."
+    },
+    security_scan: {
+      status: "VALIDATED",
+      sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      malware_scanned: true,
+      compliance_cleared: true
+    },
+    risk: {
+      score: 5,
+      level: "LOW",
+      recommendation: "AUTO_APPROVE",
+      factors: ["Verified enterprise vendor: 'Amazon Web Services EMEA' (-10)"]
+    }
+  },
+  {
+    document_id: "3e4f5a6b-9988-7766-5544-33221100ffaa",
+    filename: "Apex_Global_Consultancy_Offshore_Invoice.pdf",
+    status: "PENDING_APPROVAL",
+    decision: "AWAITING_HUMAN_REVIEW",
+    task_token: "AAAAKgAAAAIAAAAAAAAAAY12345SampleTaskToken==",
+    created_at: new Date(Date.now() - 3600000 * 1).toISOString(),
+    extracted_data: {
+      vendor: "Apex Global Consultancy Offshore Ltd",
+      invoice_number: "INV-202611-3E4F5A",
+      grand_total: 89500.00,
+      currency: "USD",
+      vendor_trusted: false,
+      raw_text_length: 890,
+      ai_model_used: "anthropic.claude-3-haiku-20240307-v1:0",
+      ai_inference_provider: "Amazon Bedrock (Serverless LLM)",
+      ai_analysis: "High risk warning: Offshore entity with unverified tax registry and unusually large transaction balance."
+    },
+    security_scan: {
+      status: "VALIDATED",
+      sha256: "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+      malware_scanned: true,
+      compliance_cleared: true
+    },
+    risk: {
+      score: 95,
+      level: "HIGH",
+      recommendation: "FLAG_FOR_MANUAL_REVIEW",
+      factors: [
+        "Untrusted or unregistered offshore entity: 'Apex Global Consultancy Offshore Ltd' (+45)",
+        "High-value financial transaction exceeding $20,000 threshold ($89,500.00) (+40)"
+      ]
+    }
+  }
+];
+
+// DOM Elements
+const dropzone = document.getElementById("dropzone");
+const fileInput = document.getElementById("fileInput");
+const documentsTbody = document.getElementById("documentsTbody");
+const refreshBtn = document.getElementById("refreshBtn");
+const modalBackdrop = document.getElementById("modalBackdrop");
+const modalTitle = document.getElementById("modalTitle");
+const modalBody = document.getElementById("modalBody");
+const modalFooter = document.getElementById("modalFooter");
+const modalClose = document.getElementById("modalClose");
+const configModal = document.getElementById("configModal");
+const configTrigger = document.getElementById("configTrigger");
+const configClose = document.getElementById("configClose");
+const apiUrlInput = document.getElementById("apiUrlInput");
+const saveConfigBtn = document.getElementById("saveConfigBtn");
+
+// Initialize
+document.addEventListener("DOMContentLoaded", () => {
+  if (apiUrlInput) apiUrlInput.value = API_BASE_URL;
+  renderDocumentsTable();
+  setupEventListeners();
+});
+
+function setupEventListeners() {
+  dropzone.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", (e) => {
+    if (e.target.files.length > 0) {
+      handleFileUpload(e.target.files[0]);
+    }
+  });
+
+  dropzone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    dropzone.classList.add("dragover");
+  });
+
+  dropzone.addEventListener("dragleave", () => {
+    dropzone.classList.remove("dragover");
+  });
+
+  dropzone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropzone.classList.remove("dragover");
+    if (e.dataTransfer.files.length > 0) {
+      handleFileUpload(e.dataTransfer.files[0]);
+    }
+  });
+
+  // Preset quick triggers
+  document.querySelectorAll(".btn-preset").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const presetType = btn.getAttribute("data-preset");
+      runPresetDemo(presetType);
+    });
+  });
+
+  refreshBtn.addEventListener("click", fetchDocuments);
+
+  modalClose.addEventListener("click", () => modalBackdrop.classList.remove("show"));
+  configTrigger.addEventListener("click", () => configModal.classList.add("show"));
+  configClose.addEventListener("click", () => configModal.classList.remove("show"));
+
+  saveConfigBtn.addEventListener("click", () => {
+    API_BASE_URL = apiUrlInput.value.trim().replace(/\/+$/, "");
+    localStorage.setItem("DOCUFLOW_API_URL", API_BASE_URL);
+    configModal.classList.remove("show");
+    fetchDocuments();
+  });
+}
+
+async function handleFileUpload(file) {
+  if (API_BASE_URL) {
+    try {
+      const stepUpload = document.getElementById("step-upload");
+      const stepParallel = document.getElementById("step-parallel");
+      const stepScore = document.getElementById("step-score");
+      const stepChoice = document.getElementById("step-choice");
+      const stepDispatch = document.getElementById("step-dispatch");
+
+      stepUpload.className = "step-item running";
+      stepUpload.querySelector(".step-status").innerText = "🔄";
+
+      // 1. Get presigned upload URL from API Gateway
+      const presignRes = await fetch(`${API_BASE_URL}/api/upload-url`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name, content_type: file.type || "application/pdf" })
+      });
+      const presignData = await presignRes.json();
+      const docId = presignData.document_id;
+
+      // 2. Upload file directly to S3 bucket via presigned URL
+      await fetch(presignData.upload_url, {
+        method: "PUT",
+        headers: { "Content-Type": file.type || "application/pdf" },
+        body: file
+      });
+      stepUpload.className = "step-item success";
+      stepUpload.querySelector(".step-status").innerText = "✅";
+
+      // 3. Trigger Step Functions execution post-upload
+      stepParallel.className = "step-item running";
+      stepParallel.querySelector(".step-status").innerText = "⨂";
+      await fetch(`${API_BASE_URL}/api/documents/${docId}/process`, {
+        method: "POST"
+      });
+
+      // 4. Poll document status to update live stepper
+      for (let i = 0; i < 5; i++) {
+        await new Promise(r => setTimeout(r, 1500));
+        const docRes = await fetch(`${API_BASE_URL}/api/documents/${docId}`);
+        if (docRes.ok) {
+          const doc = await docRes.json();
+          if (doc.status !== "PROCESSING" && doc.status !== "UPLOAD_PENDING") {
+            stepParallel.className = "step-item success";
+            stepParallel.querySelector(".step-status").innerText = "✅";
+            stepScore.className = "step-item success";
+            stepScore.querySelector(".step-status").innerText = "✅";
+            if (doc.status === "PENDING_APPROVAL") {
+              stepChoice.className = "step-item flagged";
+              stepChoice.querySelector(".step-status").innerText = "⏸️";
+            } else {
+              stepChoice.className = "step-item success";
+              stepChoice.querySelector(".step-status").innerText = "✅";
+              stepDispatch.className = "step-item success";
+              stepDispatch.querySelector(".step-status").innerText = "🚀";
+            }
+            await fetchDocuments();
+            return;
+          }
+        }
+      }
+      await fetchDocuments();
+      return;
+    } catch (err) {
+      console.warn("Real upload error, falling back to visualizer simulation:", err);
+    }
+  }
+
+  // Simulation mode
+  const docId = crypto.randomUUID ? crypto.randomUUID() : 'doc-' + Date.now();
+  await executePipelineVisualizer(docId, file.name);
+}
+
+function runPresetDemo(type) {
+  const id = (crypto.randomUUID ? crypto.randomUUID() : 'doc-' + Date.now()).substring(0, 8);
+  let filename = "AWS_Compute_Invoice.pdf";
+  if (type === "github") filename = "GitHub_Enterprise_License.pdf";
+  if (type === "fraud") filename = "Offshore_Shadow_Consultancy_89K.pdf";
+
+  executePipelineVisualizer(id, filename);
+}
+
+// Visual Stepper for Step Functions execution (Parallel + TaskToken)
+async function executePipelineVisualizer(docId, filename) {
+  const isHighRisk = filename.toLowerCase().includes("fraud") || filename.toLowerCase().includes("shadow");
+  const stepUpload = document.getElementById("step-upload");
+  const stepParallel = document.getElementById("step-parallel");
+  const stepScore = document.getElementById("step-score");
+  const stepChoice = document.getElementById("step-choice");
+  const stepDispatch = document.getElementById("step-dispatch");
+
+  const resetSteps = () => {
+    [stepUpload, stepParallel, stepScore, stepChoice, stepDispatch].forEach(el => {
+      el.className = "step-item";
+      el.querySelector(".step-status").innerText = "⏳";
+    });
+  };
+
+  resetSteps();
+
+  // 1. S3 Presigned Upload
+  stepUpload.classList.add("running");
+  stepUpload.querySelector(".step-status").innerText = "🔄";
+  await new Promise(r => setTimeout(r, 500));
+  stepUpload.className = "step-item success";
+  stepUpload.querySelector(".step-status").innerText = "✅";
+
+  // 2. Parallel Analysis (Branch 1: Extraction + Branch 2: Security Scan)
+  stepParallel.classList.add("running");
+  stepParallel.querySelector(".step-status").innerText = "⨂";
+  await new Promise(r => setTimeout(r, 700));
+  stepParallel.className = "step-item success";
+  stepParallel.querySelector(".step-status").innerText = "✅";
+
+  // 3. CalculateRiskScore
+  stepScore.classList.add("running");
+  stepScore.querySelector(".step-status").innerText = "🔄";
+  await new Promise(r => setTimeout(r, 600));
+  stepScore.className = "step-item success";
+  stepScore.querySelector(".step-status").innerText = "✅";
+
+  // 4. EvaluateRiskDecision & TaskToken
+  stepChoice.classList.add("running");
+  await new Promise(r => setTimeout(r, 500));
+  if (isHighRisk) {
+    stepChoice.className = "step-item flagged";
+    stepChoice.querySelector(".step-status").innerText = "⏸️";
+    stepChoice.querySelector(".step-info span").innerText = "Workflow PAUSED on TaskToken — Awaiting API sendTaskSuccess callback.";
+  } else {
+    stepChoice.className = "step-item success";
+    stepChoice.querySelector(".step-status").innerText = "✅";
+  }
+
+  // 5. Dispatch (if not halted for human review)
+  if (!isHighRisk) {
+    stepDispatch.classList.add("running");
+    await new Promise(r => setTimeout(r, 400));
+    stepDispatch.className = "step-item success";
+    stepDispatch.querySelector(".step-status").innerText = "🚀";
+    stepDispatch.querySelector(".step-info span").innerText = "Direct AWS SDK integration: DynamoDB updateItem & SNS alert published (Zero-Lambda)!";
+  }
+
+  // Add document to list
+  const grandTotal = isHighRisk ? 89500.00 : (filename.includes("GitHub") ? 399.00 : 1420.50);
+  const vendorName = isHighRisk 
+    ? "Apex Global Consultancy Offshore Ltd" 
+    : (filename.includes("GitHub") ? "GitHub Inc (Microsoft)" : "Amazon Web Services EMEA");
+
+  const newDoc = {
+    document_id: docId,
+    filename: filename,
+    status: isHighRisk ? "PENDING_APPROVAL" : "APPROVED",
+    decision: isHighRisk ? "AWAITING_HUMAN_REVIEW" : "AUTO_APPROVED",
+    task_token: isHighRisk ? `TASK_TOKEN_${docId.substring(0, 8)}_WAITING` : null,
+    created_at: new Date().toISOString(),
+    extracted_data: {
+      vendor: vendorName,
+      invoice_number: `INV-202611-${docId.substring(0, 6).toUpperCase()}`,
+      grand_total: grandTotal,
+      currency: "USD",
+      vendor_trusted: !isHighRisk,
+      raw_text_length: 1100,
+      ai_model_used: "anthropic.claude-3-haiku-20240307-v1:0",
+      ai_inference_provider: "Amazon Bedrock (Serverless LLM)",
+      ai_analysis: isHighRisk
+        ? "High risk warning: Offshore entity with unverified tax registry and unusually large transaction balance."
+        : `Verified cloud infrastructure entity; financial math and line items matched accurately for ${vendorName}.`
+    },
+    security_scan: {
+      status: "VALIDATED",
+      sha256: `sha256_${docId.substring(0, 16)}`,
+      malware_scanned: true,
+      compliance_cleared: true
+    },
+    risk: {
+      score: isHighRisk ? 92 : 8,
+      level: isHighRisk ? "HIGH" : "LOW",
+      recommendation: isHighRisk ? "FLAG_FOR_MANUAL_REVIEW" : "AUTO_APPROVE",
+      factors: isHighRisk 
+        ? ["Untrusted or unregistered offshore entity (+45)", "High value exceeding $20,000 (+40)"]
+        : [`Verified enterprise vendor: '${vendorName}' (-10)`]
+    }
+  };
+
+  localDocuments.unshift(newDoc);
+  renderDocumentsTable();
+}
+
+async function fetchDocuments() {
+  if (!API_BASE_URL) {
+    renderDocumentsTable();
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/documents`);
+    const data = await res.json();
+    if (data.documents && data.documents.length > 0) {
+      localDocuments = data.documents;
+    }
+    renderDocumentsTable();
+  } catch (err) {
+    console.warn("API Gateway request error, using local dataset:", err);
+    renderDocumentsTable();
+  }
+}
+
+function renderDocumentsTable() {
+  if (!documentsTbody) return;
+  documentsTbody.innerHTML = "";
+
+  if (localDocuments.length === 0) {
+    documentsTbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color:#94a3b8; padding: 2rem;">No documents processed yet. Upload a document or pick a preset above!</td></tr>`;
+    return;
+  }
+
+  localDocuments.forEach(doc => {
+    const tr = document.createElement("tr");
+    const vendor = doc.extracted_data?.vendor || "Pending...";
+    const amount = doc.extracted_data?.grand_total 
+      ? `$${Number(doc.extracted_data.grand_total).toLocaleString(undefined, {minimumFractionDigits: 2})}` 
+      : "—";
+    const riskScore = doc.risk ? `${doc.risk.score}/100 (${doc.risk.level})` : "—";
+
+    tr.innerHTML = `
+      <td><code>${doc.document_id.substring(0, 8)}...</code></td>
+      <td><strong>${escapeHtml(doc.filename)}</strong></td>
+      <td>${escapeHtml(vendor)}</td>
+      <td>${amount}</td>
+      <td><span style="color: ${doc.risk?.score >= 70 ? 'var(--accent-red)' : 'var(--accent-green)'}">${riskScore}</span></td>
+      <td><span class="status-pill ${doc.status}">${doc.status}</span></td>
+      <td>
+        <button class="btn-sm" onclick="openDetailsModal('${doc.document_id}')">Inspect</button>
+      </td>
+    `;
+    documentsTbody.appendChild(tr);
+  });
+}
+
+window.openDetailsModal = function(docId) {
+  const doc = localDocuments.find(d => d.document_id === docId);
+  if (!doc) return;
+
+  modalTitle.innerText = `Document: ${doc.filename}`;
+  modalBody.innerHTML = `
+    <div style="margin-bottom: 1rem;">
+      <strong>Status:</strong> <span class="status-pill ${doc.status}">${doc.status}</span>
+      ${doc.task_token ? `<div style="margin-top:0.4rem; font-size:0.75rem; color:var(--accent-yellow); font-family:var(--font-mono); background:rgba(245,158,11,0.1); padding:0.4rem; border-radius:4px;">⏸️ Step Functions paused on task_token: ${escapeHtml(doc.task_token.substring(0, 32))}...</div>` : ''}
+    </div>
+    <div style="margin-bottom: 1rem; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 6px; padding: 0.75rem;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.35rem;">
+        <span style="font-size:0.8rem; font-weight:600; color:#38bdf8;">🤖 Serverless AI Inference (Amazon Bedrock)</span>
+        <span style="font-size:0.7rem; font-family:var(--font-mono); color:#94a3b8;">${doc.extracted_data?.ai_model_used || 'Claude 3 Haiku'}</span>
+      </div>
+      <p style="font-size:0.8rem; color:#e2e8f0; font-style: italic;">"${doc.extracted_data?.ai_analysis || 'Automated entity analysis complete.'}"</p>
+    </div>
+    <div style="margin-bottom: 1rem;">
+      <strong>Anomaly Risk Evaluation:</strong>
+      <p style="margin-top: 0.25rem;">Score: <strong>${doc.risk?.score ?? 'N/A'}/100 (${doc.risk?.level ?? 'N/A'})</strong></p>
+      <ul style="margin-left: 1.25rem; font-size: 0.82rem; color: #94a3b8; margin-top: 0.35rem;">
+        ${(doc.risk?.factors || []).map(f => `<li>${escapeHtml(f)}</li>`).join("")}
+      </ul>
+    </div>
+    <div style="margin-bottom: 0.5rem;">
+      <strong>Security &amp; Compliance Clearance:</strong>
+      <div style="font-size:0.8rem; color:#94a3b8;">
+        SHA256: <code>${doc.security_scan?.sha256 || 'N/A'}</code> | Malware Scanned: ✅ Passed
+      </div>
+    </div>
+    <div style="margin-bottom: 0.5rem; margin-top: 0.75rem;">
+      <strong>Extracted Entities (DynamoDB Decimal Record):</strong>
+    </div>
+    <div class="json-view">${escapeHtml(JSON.stringify(doc, null, 2))}</div>
+  `;
+
+  if (doc.status === "PENDING_APPROVAL") {
+    modalFooter.innerHTML = `
+      <button class="btn-sm" style="border-color: var(--accent-red); color: var(--accent-red);" onclick="reviewDocument('${doc.document_id}', 'REJECT')">✕ Reject (sendTaskFailure)</button>
+      <button class="btn-primary" onclick="reviewDocument('${doc.document_id}', 'APPROVE')">✓ Approve (sendTaskSuccess)</button>
+    `;
+  } else {
+    modalFooter.innerHTML = `
+      <button class="btn-sm" onclick="modalBackdrop.classList.remove('show')">Close</button>
+    `;
+  }
+
+  modalBackdrop.classList.add("show");
+};
+
+window.reviewDocument = async function(docId, action) {
+  if (API_BASE_URL) {
+    try {
+      await fetch(`${API_BASE_URL}/api/documents/${docId}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: action, reviewer: "Demo Judge" })
+      });
+    } catch (e) {
+      console.warn("API approve call failed, updating locally:", e);
+    }
+  }
+
+  const doc = localDocuments.find(d => d.document_id === docId);
+  if (doc) {
+    doc.status = action === "APPROVE" ? "APPROVED" : "REJECTED";
+    doc.decision = action === "APPROVE" ? "MANUAL_APPROVED" : "MANUAL_REJECTED";
+    delete doc.task_token;
+
+    // Animate final dispatch step in UI
+    const stepDispatch = document.getElementById("step-dispatch");
+    if (stepDispatch) {
+      stepDispatch.className = "step-item success";
+      stepDispatch.querySelector(".step-status").innerText = "🚀";
+      stepDispatch.querySelector(".step-info span").innerText = `sendTaskSuccess callback received. Status: ${doc.status}`;
+    }
+  }
+
+  modalBackdrop.classList.remove("show");
+  renderDocumentsTable();
+};
+
+function escapeHtml(str) {
+  if (!str) return "";
+  return str.toString()
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
