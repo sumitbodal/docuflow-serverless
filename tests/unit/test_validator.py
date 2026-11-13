@@ -152,6 +152,39 @@ class TestValidator(unittest.TestCase):
                 self.assertTrue(sec["magic_bytes_verified"])
                 self.assertIn("image/jpeg", sec["signature_description"])
 
+    def test_txt_plain_text_signature_verification(self):
+        """Verifies valid plain text UTF-8 format passes validation."""
+        event = {
+            "document_id": "test-uuid-txt",
+            "s3_bucket": "test-bucket",
+            "s3_key": "uploads/test-uuid-txt/invoice.txt",
+            "filename": "invoice.txt"
+        }
+        with patch.object(validator_app, 'table'):
+            with patch.object(validator_app, 's3_client') as mock_s3:
+                mock_s3.head_object.return_value = {"ContentLength": 128}
+                mock_s3.get_object.return_value = {"Body": BytesIO(b"INVOICE\nVendor: AWS EMEA\nTotal: $1,420.50\n")}
+                result = validator_app.lambda_handler(event, None)
+                sec = result["security_scan"]
+                self.assertTrue(sec["magic_bytes_verified"])
+                self.assertIn("text/plain", sec["signature_description"])
+
+    def test_txt_with_binary_nulls_fails_closed(self):
+        """Verifies .txt containing binary null bytes (executable disguised as .txt) is rejected."""
+        event = {
+            "document_id": "test-uuid-bad-txt",
+            "s3_bucket": "test-bucket",
+            "s3_key": "uploads/test-uuid-bad-txt/fake.txt",
+            "filename": "fake.txt"
+        }
+        with patch.object(validator_app, 'table'):
+            with patch.object(validator_app, 's3_client') as mock_s3:
+                mock_s3.head_object.return_value = {"ContentLength": 256}
+                mock_s3.get_object.return_value = {"Body": BytesIO(b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xff\xff")}
+                with self.assertRaises(ValueError) as ctx:
+                    validator_app.lambda_handler(event, None)
+                self.assertIn("File signature mismatch", str(ctx.exception))
+
     def test_validator_fails_closed_when_dynamo_errors(self):
         """Verifies validator raises RuntimeError if DynamoDB update fails."""
         event = {

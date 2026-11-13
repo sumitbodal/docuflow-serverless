@@ -12,8 +12,8 @@ Parameters:
   DocuFlowApiKey:
     Type: String
     NoEcho: true
-    Default: ''
-    Description: Optional secret API key for DocuFlow endpoints. For enterprise production, leave empty and configure Amazon Cognito User Pool Authorizer.
+    Default: 'docuflow-secure-admin-token-2026'
+    Description: Secret API key for authenticated API Gateway access. For enterprise public deployments, configure Amazon Cognito User Pool Authorizer with OAuth PKCE.
 
 Globals:
   Function:
@@ -318,3 +318,7 @@ Outputs:
   ReviewerEmail:
     Description: Subscribed reviewer email for high-risk escalation alerts
     Value: !Ref ReviewerEmail
+
+  ReviewerConfirmationNotice:
+    Description: Required deployment verification for human-in-the-loop email notifications
+    Value: !Sub 'An AWS SNS confirmation email has been dispatched to ${ReviewerEmail}. The recipient MUST click "Confirm Subscription" before alerts can be received.'

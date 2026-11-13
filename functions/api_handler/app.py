@@ -52,14 +52,15 @@ def build_response(status_code: int, body: dict):
 
 def is_authorized(event: dict) -> bool:
     """
-    Enforces authorization for privileged API routes.
-    Checks:
-    1. API Gateway JWT authorizer claims (Cognito User Pools / OIDC).
+    Strict fail-closed authorization check.
+    Accepts:
+    1. API Gateway JWT authorizer claims (Cognito User Pools / OAuth PKCE).
     2. API Gateway Lambda authorizer context.
-    3. Authorization header ('Bearer <key>' or '<key>').
+    3. Authorization header with valid Bearer token matching DOCUFLOW_API_KEY.
     4. x-api-key header matching DOCUFLOW_API_KEY.
-    If DOCUFLOW_API_KEY is configured in the environment, requests must provide valid credentials.
-    If DOCUFLOW_API_KEY is unconfigured (local evaluation / demo mode), requests pass through.
+
+    FAIL-CLOSED: If no authorizer claims exist and DOCUFLOW_API_KEY is not configured
+    or token does not match, all requests are strictly rejected with 401 Unauthorized.
     """
     # 1. API Gateway JWT / Cognito claims
     jwt_claims = event.get("requestContext", {}).get("authorizer", {}).get("jwt", {}).get("claims")
@@ -71,9 +72,9 @@ def is_authorized(event: dict) -> bool:
     if auth_ctx:
         return True
 
-    # 3. Environment token validation
+    # 3. Environment token validation - Fail closed if DOCUFLOW_API_KEY is unset or empty
     if not DOCUFLOW_API_KEY:
-        return True
+        return False
 
     headers = event.get("headers") or {}
     auth_header = None
@@ -87,7 +88,7 @@ def is_authorized(event: dict) -> bool:
 
     if auth_header:
         token = auth_header.replace("Bearer ", "").strip()
-        if token == DOCUFLOW_API_KEY:
+        if token and token == DOCUFLOW_API_KEY:
             return True
 
     if x_api_key and x_api_key.strip() == DOCUFLOW_API_KEY:
@@ -125,29 +126,33 @@ def handle_get_upload_url(event):
             "error": f"Unsupported file extension '{ext}'. Allowed formats: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
         })
 
-    # Upfront upload size limit validation
-    declared_size = body.get("file_size") or body.get("content_length")
+    # Upfront upload size limit validation - Mandatory field to enforce 10MB upload boundary
+    raw_size = body.get("file_size") if body.get("file_size") is not None else body.get("content_length")
+    if raw_size is None:
+        return build_response(400, {
+            "error": "Missing mandatory field 'file_size'. Declared file size in bytes is required to enforce upload boundaries."
+        })
+
+    try:
+        declared_size = int(raw_size)
+    except (ValueError, TypeError):
+        return build_response(400, {"error": "Invalid 'file_size': must be an integer representing byte count."})
+
+    if declared_size <= 0:
+        return build_response(400, {"error": f"Invalid 'file_size' ({declared_size} bytes): must be greater than 0 bytes."})
+
+    if declared_size > MAX_UPLOAD_SIZE_BYTES:
+        return build_response(400, {
+            "error": f"Declared file size ({declared_size} bytes) exceeds maximum allowable limit of {MAX_UPLOAD_SIZE_BYTES} bytes (10MB). Presigned URL denied."
+        })
+
+    # Always sign ContentLength into the S3 presigned URL params so S3 strictly enforces byte count at upload
     put_params = {
         'Bucket': DOCS_BUCKET_NAME,
         'Key': s3_key,
-        'ContentType': content_type
+        'ContentType': content_type,
+        'ContentLength': declared_size
     }
-    if declared_size is not None:
-        try:
-            declared_size = int(declared_size)
-        except (ValueError, TypeError):
-            return build_response(400, {"error": "file_size must be a valid integer."})
-
-        if declared_size <= 0:
-            return build_response(400, {"error": "Declared file_size must be greater than 0 bytes."})
-
-        if declared_size > MAX_UPLOAD_SIZE_BYTES:
-            return build_response(400, {
-                "error": f"Declared file size ({declared_size} bytes) exceeds maximum allowable limit of {MAX_UPLOAD_SIZE_BYTES} bytes (10MB). Presigned URL denied."
-            })
-
-        # Sign ContentLength into presigned URL params so S3 enforces it at the upload boundary
-        put_params['ContentLength'] = declared_size
 
     try:
         presigned_url = s3_client.generate_presigned_url(
@@ -405,18 +410,36 @@ def handle_approve_document(event, document_id):
     # Verify authorization for approval callback
     if not is_authorized(event):
         return build_response(401, {
-            "error": "Unauthorized: A valid Authorization header is required to submit approval decisions."
+            "error": "Unauthorized: A valid Authorization header or API key is required to submit approval decisions."
         })
-    body = {}
-    if event.get("body"):
-        try:
-            body = json.loads(event["body"])
-        except Exception:
-            pass
 
-    action = body.get("action", "APPROVE").upper() # APPROVE or REJECT
-    reviewer = body.get("reviewer", "admin")
-    notes = body.get("notes", "Reviewed through DocuFlow dashboard")
+    raw_body = event.get("body")
+    if not raw_body:
+        return build_response(400, {
+            "error": "Missing request body. 'action' ('APPROVE' or 'REJECT') is required."
+        })
+
+    try:
+        body = json.loads(raw_body)
+        if not isinstance(body, dict):
+            return build_response(400, {"error": "Malformed request body: payload must be a JSON object."})
+    except Exception as e:
+        return build_response(400, {"error": f"Invalid JSON format in request body: {str(e)}"})
+
+    raw_action = body.get("action")
+    if not raw_action:
+        return build_response(400, {
+            "error": "Missing mandatory field 'action'. Must be explicitly specified as 'APPROVE' or 'REJECT'."
+        })
+
+    action = str(raw_action).strip().upper()
+    if action not in ("APPROVE", "REJECT"):
+        return build_response(400, {
+            "error": f"Invalid action '{raw_action}'. Allowed approval decisions are strictly 'APPROVE' or 'REJECT'."
+        })
+
+    reviewer = body.get("reviewer") or "admin"
+    notes = body.get("notes") or "Reviewed through DocuFlow dashboard"
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     new_status = "APPROVED" if action == "APPROVE" else "REJECTED"
 

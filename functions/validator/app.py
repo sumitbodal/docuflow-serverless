@@ -20,7 +20,7 @@ dynamodb = boto3.resource('dynamodb')
 TABLE_NAME = os.environ.get('TABLE_NAME', 'DocuFlowRecords')
 table = dynamodb.Table(TABLE_NAME)
 
-ALLOWED_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg'}
+ALLOWED_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg', '.txt'}
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 # 10 MB
 
 def validate_file_signature(content_bytes: bytes, ext: str) -> tuple[bool, str]:
@@ -45,6 +45,16 @@ def validate_file_signature(content_bytes: bytes, ext: str) -> tuple[bool, str]:
         if content_bytes.startswith(b"\xff\xd8\xff"):
             return True, "image/jpeg (Magic bytes verified)"
         return False, "File signature mismatch: Declared as JPEG but lacks JPEG SOI marker bytes"
+
+    elif ext == ".txt":
+        # Plain text must not contain binary null bytes in initial header and must decode as UTF-8
+        if b"\x00" not in content_bytes[:1024]:
+            try:
+                content_bytes.decode("utf-8")
+                return True, "text/plain (UTF-8 plain text verified)"
+            except UnicodeDecodeError:
+                pass
+        return False, "File signature mismatch: Declared as .txt but contains binary nulls or non-UTF-8 bytes"
 
     return False, f"Unsupported file extension: {ext}"
 
