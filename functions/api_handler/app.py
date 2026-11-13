@@ -23,6 +23,7 @@ sfn_client = boto3.client('stepfunctions')
 TABLE_NAME = os.environ.get('TABLE_NAME', 'DocuFlowRecords')
 DOCS_BUCKET_NAME = os.environ.get('DOCS_BUCKET_NAME', 'docuflow-docs-local')
 STATE_MACHINE_ARN = os.environ.get('STATE_MACHINE_ARN', '')
+DOCUFLOW_API_KEY = os.environ.get('DOCUFLOW_API_KEY', '')
 
 table = dynamodb.Table(TABLE_NAME)
 
@@ -167,6 +168,20 @@ def handle_process_document(event, document_id):
 
     # 3. Start Step Functions Execution - Fail closed if execution cannot start
     if not STATE_MACHINE_ARN:
+        # Revert status back to UPLOAD_PENDING / FAILED so document is not left stuck in PROCESSING
+        try:
+            table.update_item(
+                Key={"PK": f"DOC#{document_id}", "SK": "METADATA"},
+                UpdateExpression="SET #st = :st, updated_at = :now, error_message = :err",
+                ExpressionAttributeNames={"#st": "status"},
+                ExpressionAttributeValues={
+                    ":st": "FAILED",
+                    ":now": now_iso,
+                    ":err": "STATE_MACHINE_ARN not configured"
+                }
+            )
+        except Exception:
+            pass
         return build_response(500, {
             "error": "STATE_MACHINE_ARN environment variable is not configured on API handler.",
             "document_id": document_id
@@ -187,6 +202,21 @@ def handle_process_document(event, document_id):
         execution_arn = sfn_res.get("executionArn")
     except Exception as e:
         print(f"Step Functions start_execution error: {e}")
+        # Mark record as FAILED with error detail so it is not stuck in PROCESSING
+        try:
+            table.update_item(
+                Key={"PK": f"DOC#{document_id}", "SK": "METADATA"},
+                UpdateExpression="SET #st = :st, updated_at = :now, error_message = :err",
+                ExpressionAttributeNames={"#st": "status"},
+                ExpressionAttributeValues={
+                    ":st": "FAILED",
+                    ":now": now_iso,
+                    ":err": f"Step Functions start_execution failed: {str(e)}"
+                }
+            )
+        except Exception as ddb_err:
+            print(f"Failed to mark document as FAILED after SFN start error: {ddb_err}")
+
         return build_response(500, {
             "error": f"Failed to start Step Functions workflow execution: {str(e)}",
             "document_id": document_id
@@ -241,12 +271,41 @@ def handle_get_document(event, document_id):
     except Exception as e:
         return build_response(500, {"error": str(e)})
 
+def is_authorized(event: dict) -> bool:
+    """
+    Validates caller authorization for privileged actions (e.g. human approval decisions).
+    If DOCUFLOW_API_KEY environment variable is configured, checks Authorization header
+    ('Bearer <key>' or '<key>').
+    If unconfigured (local evaluation / demo mode), requests pass through with a logged warning.
+    """
+    if not DOCUFLOW_API_KEY:
+        return True
+
+    headers = event.get("headers") or {}
+    # Case-insensitive header lookup
+    auth_header = None
+    for k, v in headers.items():
+        if k.lower() == "authorization":
+            auth_header = v
+            break
+
+    if not auth_header:
+        return False
+
+    token = auth_header.replace("Bearer ", "").strip()
+    return token == DOCUFLOW_API_KEY
+
 def handle_approve_document(event, document_id):
     """
     Step 3: Human review decision callback.
     Resumes suspended Step Functions state machine via send_task_success(TaskToken)!
     Fails closed if document is not awaiting approval or if Step Functions fails to resume.
     """
+    # Verify authorization for approval callback
+    if not is_authorized(event):
+        return build_response(401, {
+            "error": "Unauthorized: A valid Authorization header is required to submit approval decisions."
+        })
     body = {}
     if event.get("body"):
         try:

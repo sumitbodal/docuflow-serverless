@@ -122,6 +122,47 @@ class TestApiHandler(unittest.TestCase):
                     self.assertEqual(res["statusCode"], 500)
                     data = json.loads(res["body"])
                     self.assertIn("Failed to start Step Functions workflow execution", data["error"])
+                    # Verify document is marked FAILED rather than stuck in PROCESSING
+                    mock_table.update_item.assert_called()
+                    call_kwargs = mock_table.update_item.call_args[1]
+                    self.assertEqual(call_kwargs["ExpressionAttributeValues"][":st"], "FAILED")
+
+    def test_approve_document_unauthorized_when_api_key_configured(self):
+        """Verifies /approve returns 401 Unauthorized if DOCUFLOW_API_KEY is configured and missing from headers."""
+        event_no_auth = {
+            "routeKey": "POST /api/documents/doc-12345/approve",
+            "pathParameters": {"id": "doc-12345"},
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({"action": "APPROVE"})
+        }
+        with patch.object(api_handler_app, 'DOCUFLOW_API_KEY', 'secret-admin-key-999'):
+            res = api_handler_app.lambda_handler(event_no_auth, None)
+            self.assertEqual(res["statusCode"], 401)
+            data = json.loads(res["body"])
+            self.assertIn("Unauthorized", data["error"])
+
+    def test_approve_document_authorized_when_valid_bearer_token(self):
+        """Verifies /approve proceeds when valid Authorization Bearer token is supplied."""
+        event_with_auth = {
+            "routeKey": "POST /api/documents/doc-12345/approve",
+            "pathParameters": {"id": "doc-12345"},
+            "requestContext": {"http": {"method": "POST"}},
+            "headers": {"Authorization": "Bearer secret-admin-key-999"},
+            "body": json.dumps({"action": "APPROVE", "reviewer": "Finance Director"})
+        }
+        with patch.object(api_handler_app, 'DOCUFLOW_API_KEY', 'secret-admin-key-999'):
+            with patch.object(api_handler_app, 'table') as mock_table:
+                mock_table.get_item.return_value = {
+                    "Item": {
+                        "document_id": "doc-12345",
+                        "task_token": "ValidTaskToken==",
+                        "status": "PENDING_APPROVAL"
+                    }
+                }
+                with patch.object(api_handler_app, 'sfn_client') as mock_sfn:
+                    res = api_handler_app.lambda_handler(event_with_auth, None)
+                    self.assertEqual(res["statusCode"], 200)
+                    mock_sfn.send_task_success.assert_called_once()
 
     def test_process_document_fails_closed_when_s3_missing(self):
         event = {
