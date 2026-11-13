@@ -21,7 +21,7 @@
 > *"Our architecture leverages core AWS serverless services in a resilient, event-driven flow:  
 > 1. **Amazon S3** provides direct-to-bucket upload using secure, time-limited presigned URLs — compute is never blocked while transferring large files.  
 > 2. **Amazon API Gateway** handles incoming HTTP requests with built-in CORS and zero load-balancer overhead.  
-> 3. **Amazon Bedrock** provides serverless generative AI inference — invoking Claude 3 Haiku on-demand to extract structured fields and analyze fraud risk without managing GPU clusters or model pipelines.  
+> 3. **Amazon Bedrock** provides serverless generative AI inference — invoking Amazon Nova Lite on-demand to extract structured fields and analyze fraud risk with zero servers and zero third-party approval forms.  
 > 4. **AWS Step Functions** serves as our central orchestration nervous system. Instead of a linear script, it executes a **Parallel State** running Bedrock AI extraction and security scanning concurrently, with native exponential retries.  
 > 5. For high-risk documents, Step Functions utilizes **`waitForTaskToken`** via **Amazon SNS** — pausing execution completely at zero compute cost until a human approves via API Gateway!  
 > 6. **Direct AWS SDK Integrations**: Step Functions writes directly to **Amazon DynamoDB** and publishes alerts to **Amazon SNS** without any glue Lambda functions.  

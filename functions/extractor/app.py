@@ -19,7 +19,7 @@ dynamodb = boto3.resource('dynamodb')
 bedrock_runtime = boto3.client('bedrock-runtime')
 
 TABLE_NAME = os.environ.get('TABLE_NAME', 'DocuFlowRecords')
-BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'anthropic.claude-3-haiku-20240307-v1:0')
+BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'amazon.nova-lite-v1:0')
 table = dynamodb.Table(TABLE_NAME)
 
 SAMPLE_VENDORS = [
@@ -50,7 +50,7 @@ except ImportError:
 def extract_with_bedrock(content_bytes: bytes, filename: str, document_id: str):
     """
     Serverless Multi-Modal Foundation Model Inference:
-    Directly invokes Amazon Bedrock (Claude 3 Haiku) using native Converse API
+    Directly invokes Amazon Bedrock (Amazon Nova Lite) using native Converse API
     document blocks (for PDF) or image blocks (for PNG/JPEG) with raw bytes.
     Zero server management, pay-per-token inference.
     """
@@ -118,7 +118,7 @@ def extract_with_bedrock(content_bytes: bytes, filename: str, document_id: str):
     subsegment = None
     if os.environ.get('_X_AMZN_TRACE_ID') and XRAY_ENABLED and xray_recorder:
         try:
-            subsegment = xray_recorder.begin_subsegment("AmazonBedrock_Claude3Haiku_Inference")
+            subsegment = xray_recorder.begin_subsegment("AmazonBedrock_NovaLite_Inference")
             if subsegment:
                 subsegment.put_annotation("document_id", str(document_id))
                 subsegment.put_annotation("model_id", BEDROCK_MODEL_ID)

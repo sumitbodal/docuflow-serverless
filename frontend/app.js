@@ -116,7 +116,7 @@ let localDocuments = [
       currency: "USD",
       vendor_trusted: true,
       raw_text_length: 1240,
-      ai_model_used: "anthropic.claude-3-haiku-20240307-v1:0",
+      ai_model_used: "amazon.nova-lite-v1:0",
       ai_inference_provider: "Amazon Bedrock (Serverless LLM)",
       ai_analysis: "Verified cloud infrastructure entity; financial math and line items matched accurately."
     },
@@ -148,7 +148,7 @@ let localDocuments = [
       currency: "USD",
       vendor_trusted: false,
       raw_text_length: 890,
-      ai_model_used: "anthropic.claude-3-haiku-20240307-v1:0",
+      ai_model_used: "amazon.nova-lite-v1:0",
       ai_inference_provider: "Amazon Bedrock (Serverless LLM)",
       ai_analysis: "High risk warning: Offshore entity with unverified tax registry and unusually large transaction balance."
     },
@@ -574,7 +574,7 @@ async function executePipelineVisualizer(docId, filename) {
       currency: "USD",
       vendor_trusted: !isHighRisk,
       raw_text_length: 1100,
-      ai_model_used: "anthropic.claude-3-haiku-20240307-v1:0",
+      ai_model_used: "amazon.nova-lite-v1:0",
       ai_inference_provider: "Amazon Bedrock (Serverless LLM)",
       ai_analysis: isHighRisk
         ? "High risk warning: Offshore entity with unverified tax registry and unusually large transaction balance."
@@ -667,7 +667,7 @@ window.openDetailsModal = function(docId) {
     <div style="margin-bottom: 1rem; background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 6px; padding: 0.75rem;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.35rem;">
         <span style="font-size:0.8rem; font-weight:600; color:#38bdf8;">🤖 Serverless AI Inference (Amazon Bedrock)</span>
-        <span style="font-size:0.7rem; font-family:var(--font-mono); color:#94a3b8;">${doc.extracted_data?.ai_model_used || 'Claude 3 Haiku'}</span>
+        <span style="font-size:0.7rem; font-family:var(--font-mono); color:#94a3b8;">${doc.extracted_data?.ai_model_used || 'Amazon Nova Lite'}</span>
       </div>
       <p style="font-size:0.8rem; color:#e2e8f0; font-style: italic;">"${doc.extracted_data?.ai_analysis || 'Automated entity analysis complete.'}"</p>
     </div>

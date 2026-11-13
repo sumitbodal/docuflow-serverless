@@ -72,7 +72,7 @@ flowchart TD
 
 | Service | Architectural Role | Why It Exemplifies "No Pipeline, No Problem" |
 |---|---|---|
-| **Amazon Bedrock** | Serverless Multi-Modal Foundation Model Inference | Invokes Anthropic Claude 3 Haiku via the Converse API with native multi-modal document blocks (PDF) and image blocks (PNG/JPEG) using raw bytes. Extracts complex unstructured financial entities without managing inference servers, GPU clusters, or OCR pipelines. |
+| **Amazon Bedrock** | Serverless Multi-Modal Foundation Model Inference | Invokes Amazon Nova Lite (`amazon.nova-lite-v1:0`) via the Converse API with native multi-modal document blocks (PDF) and image blocks (PNG/JPEG) using raw bytes. Being AWS's native first-party model, it requires zero third-party approval forms and is enabled instantly on any AWS account. |
 | **Amazon S3** | Ingestion & Static Web Hosting | Documents are uploaded directly from client to S3 using secure presigned URLs without burdening compute. Execution begins only after S3 confirms upload. |
 | **Amazon API Gateway** | Managed HTTP API v2 | Low-latency REST endpoints for upload requests, document listing, processing triggers, and approval callbacks (`sendTaskSuccess`). Built-in CORS with zero load-balancer setup. |
 | **AWS Step Functions** | Resilient Visual Orchestration | Uses `Parallel` fan-out for concurrent entity extraction & security scanning, native exponential retries, and `waitForTaskToken` for true asynchronous human approvals. |
@@ -89,7 +89,7 @@ Traditional document AI solutions require custom machine learning pipelines: gat
 **DocuFlow AI** takes a pure serverless approach using **Amazon Bedrock**:
 1. **Zero GPUs or OCR Clusters to Provision**: The `ExtractorFunction` calls `bedrock-runtime:Converse` on-demand with raw PDF document blocks and JPEG/PNG image blocks.
 2. **Scale to Zero**: If no documents are uploaded, Bedrock costs $0.00.
-3. **Multi-Modal Entity Reasoning**: Claude 3 Haiku natively reads document visual layout, extracting dates, tax IDs, vendor domains, line items, and risk commentary directly into strict JSON format with fail-closed integrity.
+3. **Multi-Modal Entity Reasoning**: Amazon Nova Lite natively reads document visual layout, extracting dates, tax IDs, vendor domains, line items, and risk commentary directly into strict JSON format with fail-closed integrity. No third-party questionnaires or approval delays.
 4. **Resilient Fallback**: If Bedrock is unreachable or running in an offline test sandbox, a deterministic rule engine takes over automatically.
 
 ---
