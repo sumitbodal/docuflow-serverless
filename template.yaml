@@ -203,6 +203,20 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref DocuFlowTable
 
+  ReviewHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/risk_scorer/
+      Handler: app.review_handler
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref DocuFlowNotificationTopic
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DocuFlowTable
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt DocuFlowNotificationTopic.TopicName
+
   # ============================================================================
   # 5. MESSAGING: Amazon Simple Notification Service (SNS)
   # ============================================================================
@@ -226,6 +240,7 @@ Resources:
         ValidatorFunctionArn: !GetAtt ValidatorFunction.Arn
         ExtractorFunctionArn: !GetAtt ExtractorFunction.Arn
         RiskScorerFunctionArn: !GetAtt RiskScorerFunction.Arn
+        ReviewHandlerFunctionArn: !GetAtt ReviewHandlerFunction.Arn
         DocuFlowNotificationTopicArn: !Ref DocuFlowNotificationTopic
         DocuFlowTableName: !Ref DocuFlowTable
       Policies:
@@ -235,6 +250,8 @@ Resources:
             FunctionName: !Ref ExtractorFunction
         - LambdaInvokePolicy:
             FunctionName: !Ref RiskScorerFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ReviewHandlerFunction
         - DynamoDBCrudPolicy:
             TableName: !Ref DocuFlowTable
         - SNSPublishMessagePolicy:

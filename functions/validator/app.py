@@ -62,7 +62,7 @@ def lambda_handler(event, context):
     file_size = 102400
     file_sha256 = hashlib.sha256(f"{document_id}-{filename}".encode('utf-8')).hexdigest()
 
-    # Read S3 object if available to compute real cryptographic hash and byte size
+    # Read S3 object if available to compute real cryptographic hash and byte size - Fail closed
     if s3_bucket and s3_key:
         try:
             head_res = s3_client.head_object(Bucket=s3_bucket, Key=s3_key)
@@ -72,7 +72,7 @@ def lambda_handler(event, context):
             file_sha256 = hashlib.sha256(content_bytes).hexdigest()
             file_size = len(content_bytes)
         except Exception as e:
-            print(f"S3 get_object note (using deterministic hash): {e}")
+            raise FileNotFoundError(f"S3 document object s3://{s3_bucket}/{s3_key} could not be retrieved: {e}")
 
     if file_size > MAX_FILE_SIZE_BYTES:
         raise ValueError(f"File size {file_size} exceeds maximum limit of {MAX_FILE_SIZE_BYTES} bytes")
@@ -83,8 +83,10 @@ def lambda_handler(event, context):
         "file_size_bytes": int(file_size),
         "extension": ext,
         "sha256": file_sha256,
-        "malware_scanned": True,
+        "integrity_verified": True,
+        "format_whitelisted": True,
         "compliance_cleared": True,
+        "check_scope": "Cryptographic SHA-256 Integrity, Size Limits & Extension Whitelist",
         "validated_at": now_iso
     }
 

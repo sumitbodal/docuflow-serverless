@@ -40,13 +40,27 @@ class TestValidator(unittest.TestCase):
                 self.assertEqual(sec["status"], "VALIDATED")
                 self.assertEqual(sec["file_size_bytes"], len(b"%PDF-1.4 Mock Invoice Content"))
                 self.assertEqual(sec["extension"], ".pdf")
-                self.assertTrue(sec["malware_scanned"])
+                self.assertTrue(sec["integrity_verified"])
+                self.assertTrue(sec["format_whitelisted"])
                 self.assertTrue(sec["compliance_cleared"])
                 self.assertIn("sha256", sec)
                 # SHA256 of b"%PDF-1.4 Mock Invoice Content"
                 import hashlib
                 expected_sha = hashlib.sha256(b"%PDF-1.4 Mock Invoice Content").hexdigest()
                 self.assertEqual(sec["sha256"], expected_sha)
+
+    def test_missing_s3_object_fails_closed(self):
+        """Verifies fail-closed behavior when S3 object cannot be found."""
+        event = {
+            "document_id": "test-uuid-missing",
+            "s3_bucket": "test-bucket",
+            "s3_key": "uploads/test-uuid-missing/missing.pdf",
+            "filename": "missing.pdf"
+        }
+        with patch.object(validator_app, 's3_client') as mock_s3:
+            mock_s3.head_object.side_effect = Exception("NoSuchKey")
+            with self.assertRaises(FileNotFoundError):
+                validator_app.lambda_handler(event, None)
 
     def test_invalid_extension_raises_error(self):
         event = {

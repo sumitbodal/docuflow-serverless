@@ -24,7 +24,8 @@ let localDocuments = [
     security_scan: {
       status: "VALIDATED",
       sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      malware_scanned: true,
+      integrity_verified: true,
+      format_whitelisted: true,
       compliance_cleared: true
     },
     risk: {
@@ -55,7 +56,8 @@ let localDocuments = [
     security_scan: {
       status: "VALIDATED",
       sha256: "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
-      malware_scanned: true,
+      integrity_verified: true,
+      format_whitelisted: true,
       compliance_cleared: true
     },
     risk: {
@@ -312,7 +314,8 @@ async function executePipelineVisualizer(docId, filename) {
     security_scan: {
       status: "VALIDATED",
       sha256: `sha256_${docId.substring(0, 16)}`,
-      malware_scanned: true,
+      integrity_verified: true,
+      format_whitelisted: true,
       compliance_cleared: true
     },
     risk: {
@@ -405,9 +408,9 @@ window.openDetailsModal = function(docId) {
       </ul>
     </div>
     <div style="margin-bottom: 0.5rem;">
-      <strong>Security &amp; Compliance Clearance:</strong>
+      <strong>Security &amp; Integrity Clearance:</strong>
       <div style="font-size:0.8rem; color:#94a3b8;">
-        SHA256: <code>${doc.security_scan?.sha256 || 'N/A'}</code> | Malware Scanned: ✅ Passed
+        SHA256: <code>${doc.security_scan?.sha256 || 'N/A'}</code> | Format Whitelist: ✅ Passed | Cryptographic Integrity: ✅ Verified
       </div>
     </div>
     <div style="margin-bottom: 0.5rem; margin-top: 0.75rem;">

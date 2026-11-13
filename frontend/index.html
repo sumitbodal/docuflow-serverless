@@ -122,21 +122,21 @@
             <div class="step-status">⏳</div>
             <div class="step-info">
               <strong>2. ParallelAnalysis (Concurrent Execution)</strong>
-              <span>Branch A: Entity Extraction (OCR) ⨂ Branch B: Security &amp; Compliance Scan</span>
+              <span>Branch A: Bedrock Multi-Modal Extraction (Native PDF/Image) ⨂ Branch B: Cryptographic SHA-256 &amp; Format Whitelist</span>
             </div>
           </div>
           <div class="step-item" id="step-score">
             <div class="step-status">⏳</div>
             <div class="step-info">
               <strong>3. CalculateRiskScore</strong>
-              <span>Merges parallel branches; evaluates vendor registry &amp; amount thresholds</span>
+              <span>Merges parallel branches; evaluates vendor registry &amp; anomaly thresholds</span>
             </div>
           </div>
           <div class="step-item" id="step-choice">
             <div class="step-status">⏳</div>
             <div class="step-info">
               <strong>4. EvaluateRiskDecision &amp; TaskToken</strong>
-              <span>Score &ge; 70 suspends workflow in waitForTaskToken awaiting API callback</span>
+              <span>Score &ge; 70 stages TaskToken in DynamoDB via ReviewHandler and suspends execution</span>
             </div>
           </div>
           <div class="step-item" id="step-dispatch">

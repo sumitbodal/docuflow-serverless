@@ -61,11 +61,34 @@ class TestApiHandler(unittest.TestCase):
                 }
             }
             with patch.object(api_handler_app, 's3_client') as mock_s3:
+                mock_s3.head_object.return_value = {"ContentLength": 1024}
                 with patch.object(api_handler_app, 'sfn_client') as mock_sfn:
                     mock_sfn.start_execution.return_value = {"executionArn": "arn:aws:states:exec-12345"}
                     res = api_handler_app.lambda_handler(event, None)
                     self.assertEqual(res["statusCode"], 200)
                     mock_sfn.start_execution.assert_called_once()
+
+    def test_process_document_fails_closed_when_s3_missing(self):
+        event = {
+            "routeKey": "POST /api/documents/doc-missing/process",
+            "pathParameters": {"id": "doc-missing"},
+            "requestContext": {"http": {"method": "POST"}}
+        }
+        with patch.object(api_handler_app, 'table') as mock_table:
+            mock_table.get_item.return_value = {
+                "Item": {
+                    "document_id": "doc-missing",
+                    "filename": "missing.pdf",
+                    "s3_key": "uploads/doc-missing/missing.pdf",
+                    "s3_bucket": "test-bucket"
+                }
+            }
+            with patch.object(api_handler_app, 's3_client') as mock_s3:
+                with patch.object(api_handler_app, 'sfn_client') as mock_sfn:
+                    mock_s3.head_object.side_effect = Exception("404 NotFound")
+                    res = api_handler_app.lambda_handler(event, None)
+                    self.assertEqual(res["statusCode"], 400)
+                    mock_sfn.start_execution.assert_not_called()
 
     def test_approve_document_resumes_step_functions_via_task_token(self):
         event = {

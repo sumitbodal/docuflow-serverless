@@ -75,9 +75,57 @@ class TestExtractor(unittest.TestCase):
                     self.assertEqual(data["invoice_number"], "INV-AWS-2026-9912")
                     self.assertEqual(data["vendor"], "Amazon Web Services EMEA SARL")
                     self.assertEqual(data["grand_total"], 1420.50)
-                    self.assertEqual(data["ai_inference_provider"], "Amazon Bedrock (Serverless LLM)")
-                    self.assertEqual(data["ai_model_used"], "anthropic.claude-3-haiku-20240307-v1:0")
+                    self.assertIn("Amazon Bedrock", data["ai_inference_provider"])
+                    self.assertEqual(data["input_modality"], "native_pdf")
                     mock_bedrock.converse.assert_called_once()
+                    # Verify raw bytes were passed in native document content block
+                    call_args = mock_bedrock.converse.call_args[1]
+                    blocks = call_args["messages"][0]["content"]
+                    self.assertIn("document", blocks[0])
+                    self.assertEqual(blocks[0]["document"]["format"], "pdf")
+                    self.assertEqual(blocks[0]["document"]["source"]["bytes"], sample_invoice_text)
+
+    def test_bedrock_native_image_extraction(self):
+        """Verifies multi-modal image support passing raw bytes in Bedrock image block."""
+        png_header_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRmock_invoice_image_bytes"
+        event = {
+            "document_id": "doc-img-9999",
+            "filename": "receipt_scan.png",
+            "s3_bucket": "test-bucket",
+            "s3_key": "uploads/doc-img-9999/receipt_scan.png"
+        }
+        bedrock_mock_response = {
+            "output": {
+                "message": {
+                    "content": [{"text": json.dumps({"invoice_number": "REC-999", "grand_total": 55.00, "vendor": "Datadog Cloud Monitoring"})}]
+                }
+            }
+        }
+        with patch.object(extractor_app, 'table'):
+            with patch.object(extractor_app, 's3_client') as mock_s3:
+                with patch.object(extractor_app, 'bedrock_runtime') as mock_bedrock:
+                    mock_s3.get_object.return_value = {"Body": BytesIO(png_header_bytes)}
+                    mock_bedrock.converse.return_value = bedrock_mock_response
+                    res = extractor_app.lambda_handler(event, None)
+                    data = res["extracted_data"]
+                    self.assertEqual(data["input_modality"], "native_image")
+                    call_args = mock_bedrock.converse.call_args[1]
+                    blocks = call_args["messages"][0]["content"]
+                    self.assertIn("image", blocks[0])
+                    self.assertEqual(blocks[0]["image"]["format"], "png")
+
+    def test_missing_s3_file_fails_closed(self):
+        """Verifies fail-closed behavior: missing S3 object raises error instead of fake data."""
+        event = {
+            "document_id": "doc-missing-0000",
+            "filename": "missing.pdf",
+            "s3_bucket": "test-bucket",
+            "s3_key": "uploads/doc-missing-0000/missing.pdf"
+        }
+        with patch.object(extractor_app, 's3_client') as mock_s3:
+            mock_s3.get_object.side_effect = Exception("NoSuchKey: The specified key does not exist.")
+            with self.assertRaises(FileNotFoundError):
+                extractor_app.lambda_handler(event, None)
 
     def test_real_content_byte_extraction_fallback(self):
         """Verifies deterministic rule fallback if Bedrock model is unavailable."""

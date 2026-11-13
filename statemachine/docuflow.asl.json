@@ -116,12 +116,16 @@
 
     "RequestManualApproval": {
       "Type": "Task",
-      "Comment": "Direct AWS SDK integration: publishes approval request to Amazon SNS with TaskToken and pauses workflow",
-      "Resource": "arn:aws:states:::sns:publish.waitForTaskToken",
+      "Comment": "Suspends workflow on waitForTaskToken; stores token in DynamoDB via ReviewHandlerFunction and alerts SNS",
+      "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
       "Parameters": {
-        "TopicArn": "${DocuFlowNotificationTopicArn}",
-        "Subject.$": "States.Format('[ACTION REQUIRED] Invoice Approval Required: {}', $.document_id)",
-        "Message.$": "States.Format('DocuFlow AI Anomaly Flag: Invoice {} flagged with Risk Score {}. Vendor: {}. Total: ${}. Resume execution by calling /api/documents/{}/approve with taskToken: {}', $.document_id, $.risk.score, $.extracted_data.vendor, $.extracted_data.grand_total, $.document_id, $$.Task.Token)"
+        "FunctionName": "${ReviewHandlerFunctionArn}",
+        "Payload": {
+          "document_id.$": "$.document_id",
+          "task_token.$": "$$.Task.Token",
+          "risk.$": "$.risk",
+          "extracted_data.$": "$.extracted_data"
+        }
       },
       "TimeoutSeconds": 604800,
       "Catch": [

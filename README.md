@@ -51,7 +51,7 @@ flowchart TD
         L_Extract --> L_Score
         L_Validate --> L_Score
         L_Score --> ChoiceState{"Risk Score >= 70?"}
-        ChoiceState -->|High Risk: Anomaly Flag| WaitForReview["Task: sns:publish.waitForTaskToken\n(Publishes TaskToken & Pauses Execution)"]
+        ChoiceState -->|High Risk: Anomaly Flag| WaitForReview["Task: ReviewHandlerFunction.waitForTaskToken\n(Stores TaskToken in DynamoDB & Publishes SNS Alert)"]
         ChoiceState -->|Low Risk: Safe| AutoApprove["Pass: AutoApprove\n(APPROVED)"]
         
         WaitForReview --> DDB_Direct["Task: dynamodb:updateItem\n(Direct SDK Write without Lambda)"]
@@ -72,7 +72,7 @@ flowchart TD
 
 | Service | Architectural Role | Why It Exemplifies "No Pipeline, No Problem" |
 |---|---|---|
-| **Amazon Bedrock** | Serverless Foundation Model Inference | Invokes Anthropic Claude 3 Haiku / Titan zero-shot LLM via the Converse API. Extracts complex unstructured financial entities without managing inference servers, GPU clusters, or training pipelines. |
+| **Amazon Bedrock** | Serverless Multi-Modal Foundation Model Inference | Invokes Anthropic Claude 3 Haiku via the Converse API with native multi-modal document blocks (PDF) and image blocks (PNG/JPEG) using raw bytes. Extracts complex unstructured financial entities without managing inference servers, GPU clusters, or OCR pipelines. |
 | **Amazon S3** | Ingestion & Static Web Hosting | Documents are uploaded directly from client to S3 using secure presigned URLs without burdening compute. Execution begins only after S3 confirms upload. |
 | **Amazon API Gateway** | Managed HTTP API v2 | Low-latency REST endpoints for upload requests, document listing, processing triggers, and approval callbacks (`sendTaskSuccess`). Built-in CORS with zero load-balancer setup. |
 | **AWS Step Functions** | Resilient Visual Orchestration | Uses `Parallel` fan-out for concurrent entity extraction & security scanning, native exponential retries, and `waitForTaskToken` for true asynchronous human approvals. |
@@ -83,13 +83,13 @@ flowchart TD
 
 ---
 
-## 🤖 Why Amazon Bedrock? (True Serverless AI Without Operational Tax)
-Traditional document AI solutions require custom machine learning pipelines: gathering training data, fine-tuning OCR models, provisioning GPU clusters (like EC2 `g5.xlarge`), and configuring auto-scaling endpoints. That is the ultimate "operational tax."
+## 🤖 Why Amazon Bedrock? (True Serverless Multi-Modal AI Without Operational Tax)
+Traditional document AI solutions require custom machine learning pipelines: gathering training data, running separate OCR microservices, provisioning GPU clusters (like EC2 `g5.xlarge`), and configuring auto-scaling endpoints. That is the ultimate "operational tax."
 
 **DocuFlow AI** takes a pure serverless approach using **Amazon Bedrock**:
-1. **Zero GPUs to Provision**: The `ExtractorFunction` calls `bedrock-runtime:Converse` on-demand.
-2. **Scale to Zero**: If no documents are uploaded, Bedrock costs \$0.00.
-3. **Structured Entity Reasoning**: Claude 3 Haiku extracts dates, tax IDs, vendor domains, line items, and risk commentary directly into strict JSON format with zero regex brittle dependencies.
+1. **Zero GPUs or OCR Clusters to Provision**: The `ExtractorFunction` calls `bedrock-runtime:Converse` on-demand with raw PDF document blocks and JPEG/PNG image blocks.
+2. **Scale to Zero**: If no documents are uploaded, Bedrock costs $0.00.
+3. **Multi-Modal Entity Reasoning**: Claude 3 Haiku natively reads document visual layout, extracting dates, tax IDs, vendor domains, line items, and risk commentary directly into strict JSON format with fail-closed integrity.
 4. **Resilient Fallback**: If Bedrock is unreachable or running in an offline test sandbox, a deterministic rule engine takes over automatically.
 
 ---
@@ -142,16 +142,16 @@ Even without active cloud credentials, you can immediately test DocuFlow AI:
 ---
 
 ## 🧪 Automated Testing
-Run the comprehensive 12-test suite verifying all microservices, parallel inputs, task tokens, and decimal serialization:
+Run the comprehensive 22-test suite verifying all microservices, multi-modal Converse API parsing, fail-closed S3 guards, parallel inputs, task tokens, and decimal serialization:
 ```bash
-python -m unittest discover -s tests/unit -p "test_*.py"
+python -m unittest discover -s tests/unit -p "test_*.py" -v
 ```
 
 ---
 
 ## 🏆 Why DocuFlow AI Wins
-1. **True Asynchronous Human-in-the-Loop**: Employs AWS Step Functions' `waitForTaskToken` pattern to pause workflows without burning compute, resumed via API Gateway callback.
-2. **Parallel Fan-Out**: Runs entity extraction and security compliance scanning concurrently in Step Functions.
-3. **Real Byte & Document Parsing**: Inspects actual S3 document content and regex structure, persisting financial data with true DynamoDB Decimals.
+1. **True Asynchronous Human-in-the-Loop**: Employs AWS Step Functions' `waitForTaskToken` pattern to pause workflows without burning compute, persisted in DynamoDB and resumed via API Gateway callback.
+2. **Parallel Fan-Out & Fail-Closed Guardrails**: Runs entity extraction and cryptographic SHA-256 integrity validation concurrently in Step Functions, failing closed if files are missing or tampered.
+3. **Multi-Modal Bedrock Foundation Models**: Native binary PDF and image document blocks eliminate complex OCR pipelines, persisting financial data with true DynamoDB Decimals.
 4. **Pristine Serverless Architecture**: Uses all 5 recommended serverless services with scale-to-zero cost.
 5. **Instant Usability**: Features a fully responsive live visual dashboard and reproducible SAM IaC.

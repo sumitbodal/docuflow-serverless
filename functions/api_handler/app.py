@@ -131,13 +131,15 @@ def handle_process_document(event, document_id):
         s3_bucket = doc.get("s3_bucket", DOCS_BUCKET_NAME)
         filename = doc.get("filename", "document.pdf")
 
-    # 2. Verify object exists on S3 (or accept mock in local test)
-    object_exists = False
+    # 2. FAIL CLOSED: Verify object exists on S3 before triggering Step Functions
     try:
         s3_client.head_object(Bucket=s3_bucket, Key=s3_key)
         object_exists = True
     except Exception as e:
-        print(f"S3 head_object note: {e}")
+        return build_response(400, {
+            "error": f"Document file not found in S3 bucket '{s3_bucket}'. Please upload bytes before triggering processing.",
+            "s3_key": s3_key
+        })
 
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 

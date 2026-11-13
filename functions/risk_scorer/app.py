@@ -179,6 +179,18 @@ def review_handler(event, context):
     except Exception as e:
         print(f"DynamoDB update error in review_handler: {e}")
 
+    # Also notify administrators via SNS topic if configured
+    sns_topic_arn = os.environ.get("SNS_TOPIC_ARN")
+    if sns_topic_arn:
+        try:
+            boto3.client('sns').publish(
+                TopicArn=sns_topic_arn,
+                Subject=f"[ACTION REQUIRED] Invoice Approval Required: {document_id}",
+                Message=f"DocuFlow AI Anomaly Flag: Invoice {document_id} has Risk Score {risk.get('score', 'HIGH')}. Review in dashboard or call /api/documents/{document_id}/approve."
+            )
+        except Exception as e:
+            print(f"SNS publish note in review_handler: {e}")
+
     return {
         "statusCode": 200,
         "message": "Task token saved. Awaiting human decision via API.",

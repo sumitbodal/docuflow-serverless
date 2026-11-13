@@ -47,21 +47,22 @@ except ImportError:
         def parse_dynamo_payload(s):
             return json.loads(s, parse_float=Decimal)
 
-def extract_with_bedrock(text_content: str, filename: str, document_id: str):
+def extract_with_bedrock(content_bytes: bytes, filename: str, document_id: str):
     """
-    Serverless Foundation Model Inference:
-    Directly invokes Amazon Bedrock (Claude 3 Haiku / Titan) to perform
-    zero-shot document entity extraction, fraud classification, and JSON structuring.
+    Serverless Multi-Modal Foundation Model Inference:
+    Directly invokes Amazon Bedrock (Claude 3 Haiku) using native Converse API
+    document blocks (for PDF) or image blocks (for PNG/JPEG) with raw bytes.
     Zero server management, pay-per-token inference.
     """
-    if not text_content or len(text_content.strip()) < 10:
+    if not content_bytes or len(content_bytes) < 10:
         return None
+
+    _, ext = os.path.splitext(filename.lower())
 
     prompt = (
         "You are an enterprise financial document extraction and compliance auditor. "
-        f"Analyze the following document (Filename: {filename}, Document ID: {document_id}). "
+        f"Analyze the attached document (Filename: {filename}, Document ID: {document_id}). "
         "Extract the structured fields in strictly valid JSON format.\n\n"
-        f"Document Content:\n\"\"\"\n{text_content[:4000]}\n\"\"\"\n\n"
         "Return ONLY a valid JSON object matching this exact structure with no conversational preamble:\n"
         "{\n"
         '  "invoice_number": "string",\n'
@@ -82,6 +83,38 @@ def extract_with_bedrock(text_content: str, filename: str, document_id: str):
         "}"
     )
 
+    # Build native multi-modal content blocks for Amazon Bedrock Converse API
+    content_blocks = []
+    clean_doc_name = re.sub(r'[^a-zA-Z0-9_-]', '_', os.path.splitext(filename)[0])[:30] or "invoice_doc"
+
+    if ext == ".pdf":
+        content_blocks.append({
+            "document": {
+                "format": "pdf",
+                "name": clean_doc_name,
+                "source": {"bytes": content_bytes}
+            }
+        })
+        content_blocks.append({"text": prompt})
+    elif ext in [".png", ".jpg", ".jpeg"]:
+        img_format = "png" if ext == ".png" else "jpeg"
+        content_blocks.append({
+            "image": {
+                "format": img_format,
+                "source": {"bytes": content_bytes}
+            }
+        })
+        content_blocks.append({"text": prompt})
+    else:
+        # Plain text formats (.txt, .csv)
+        try:
+            text_str = content_bytes.decode('utf-8', errors='ignore')
+        except Exception:
+            text_str = ""
+        content_blocks.append({
+            "text": f"Document content:\n\"\"\"\n{text_str[:4000]}\n\"\"\"\n\n{prompt}"
+        })
+
     subsegment = None
     if os.environ.get('_X_AMZN_TRACE_ID') and XRAY_ENABLED and xray_recorder:
         try:
@@ -89,27 +122,29 @@ def extract_with_bedrock(text_content: str, filename: str, document_id: str):
             if subsegment:
                 subsegment.put_annotation("document_id", str(document_id))
                 subsegment.put_annotation("model_id", BEDROCK_MODEL_ID)
+                subsegment.put_annotation("file_extension", ext)
                 subsegment.put_metadata("filename", filename)
+                subsegment.put_metadata("byte_size", len(content_bytes))
         except Exception:
             pass
 
     try:
         response = bedrock_runtime.converse(
             modelId=BEDROCK_MODEL_ID,
-            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            messages=[{"role": "user", "content": content_blocks}],
             inferenceConfig={"temperature": 0.0, "maxTokens": 1000}
         )
         content_text = response['output']['message']['content'][0]['text']
-        # Match the outermost JSON object — find the first '{' and its matching '}'
-        # Using greedy + anchoring to avoid capturing nested sub-objects
+        # Match the outermost JSON object
         start = content_text.find('{')
         end = content_text.rfind('}')
         if start != -1 and end != -1 and end > start:
             json_str = content_text[start:end + 1]
             parsed = parse_dynamo_payload(json_str)
             parsed["ai_model_used"] = BEDROCK_MODEL_ID
-            parsed["ai_inference_provider"] = "Amazon Bedrock (Serverless LLM)"
-            parsed["raw_text_length"] = len(text_content)
+            parsed["ai_inference_provider"] = "Amazon Bedrock (Serverless Multi-Modal LLM)"
+            parsed["input_modality"] = "native_pdf" if ext == ".pdf" else ("native_image" if ext in [".png", ".jpg", ".jpeg"] else "text")
+            parsed["raw_byte_length"] = len(content_bytes)
             # Ensure float rounding for safety
             if "subtotal" in parsed: parsed["subtotal"] = round(float(parsed["subtotal"]), 2)
             if "tax_amount" in parsed: parsed["tax_amount"] = round(float(parsed["tax_amount"]), 2)
@@ -237,26 +272,22 @@ def lambda_handler(event, context):
     s3_key = event.get("s3_key")
     filename = event.get("filename", "invoice.pdf")
 
-    # Read real bytes from S3 if bucket and key are present
+    # Read real bytes from S3 if bucket and key are present - Fail closed if missing
     content_bytes = b""
     if s3_bucket and s3_key:
         try:
             s3_obj = s3_client.get_object(Bucket=s3_bucket, Key=s3_key)
             content_bytes = s3_obj['Body'].read()
         except Exception as e:
-            print(f"S3 get_object note: {e}")
-            content_bytes = f"Invoice {filename} for document {document_id}".encode('utf-8')
+            raise FileNotFoundError(f"Document object s3://{s3_bucket}/{s3_key} could not be read: {e}")
 
-    text_content = ""
-    try:
-        text_content = content_bytes.decode('utf-8', errors='ignore')
-    except Exception:
-        text_content = ""
+    if not content_bytes:
+        raise ValueError(f"Document payload is empty or missing for document {document_id}")
 
-    # 1. Try Amazon Bedrock serverless LLM extraction first
-    extracted_data = extract_with_bedrock(text_content, filename, document_id)
+    # 1. Try Amazon Bedrock serverless Multi-Modal extraction first (native PDF/Image)
+    extracted_data = extract_with_bedrock(content_bytes, filename, document_id)
 
-    # 2. Fall back to deterministic rule extraction if Bedrock unavailable
+    # 2. Fall back to deterministic rule extraction if Bedrock is offline or in sandbox
     if not extracted_data:
         extracted_data = parse_document_content_rules(content_bytes, filename, document_id)
 
