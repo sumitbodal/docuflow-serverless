@@ -128,6 +128,9 @@ SAM provisions the S3 buckets, DynamoDB table, API Gateway HTTP API with native 
 ### 2. Configure Reviewer Account in Amazon Cognito
 DocuFlow uses an enterprise-hardened Cognito User Pool where public self-registration is disabled (`AllowAdminCreateUserOnly: true`) and approvals require membership in the `Reviewers` group. Create your authorized reviewer account using the AWS CLI:
 
+> [!WARNING]
+> **Use a Strong, Private Password**: Replace `<YOUR_STRONG_PASSWORD>` below with a private password meeting Cognito's policy (minimum 8 characters with uppercase, lowercase, and numbers). Never use fixed or shared passwords in production.
+
 ```bash
 # 1. Retrieve Cognito User Pool ID from deployment outputs
 USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name docuflow --query "Stacks[0].Outputs[?OutputKey=='CognitoUserPoolId'].OutputValue" --output text)
@@ -139,11 +142,11 @@ aws cognito-idp admin-create-user \
   --user-attributes Name=email,Value=reviewer@example.com \
   --message-action SUPPRESS
 
-# 3. Set a permanent password (e.g. DocuFlow2026!)
+# 3. Set a strong permanent password (replace <YOUR_STRONG_PASSWORD>)
 aws cognito-idp admin-set-user-password \
   --user-pool-id $USER_POOL_ID \
   --username reviewer@example.com \
-  --password "DocuFlow2026!" \
+  --password "<YOUR_STRONG_PASSWORD>" \
   --permanent
 
 # 4. Assign user to the Reviewers group (required for document approvals)
@@ -162,7 +165,7 @@ aws s3 sync frontend/ s3://<DocuFlowFrontendBucketName>/
 1. Open the Output `WebDashboardUrl` in your browser.
 2. Click **⚙️ Connect & Sign In** in the top navigation bar.
 3. Enter your `HttpApiUrl` and `CognitoUserPoolClientId` (from SAM deployment outputs).
-4. Enter `reviewer@example.com` and password `DocuFlow2026!`, then click **Sign In with Cognito**.
+4. Enter `reviewer@example.com` and your chosen strong password, then click **Sign In with Cognito**.
 5. The dashboard authenticates directly with AWS Cognito (`USER_PASSWORD_AUTH`), obtains your verified JWT ID token, and displays your active `Reviewer` role badge!
 
 ---
@@ -172,7 +175,7 @@ aws s3 sync frontend/ s3://<DocuFlowFrontendBucketName>/
 - **Role-Based Access Control (RBAC) & Tenant Isolation**:
   - **Closed Registration**: `AllowAdminCreateUserOnly: true` blocks public self-registration.
   - **Reviewer Group Enforcement**: Only users belonging to the `Reviewers` or `Admins` Cognito group can approve or reject documents via `POST /api/documents/{id}/approve` (non-reviewers receive HTTP 403 Forbidden).
-  - **Tenant / Owner Isolation**: Non-reviewer callers can only view and process documents they own (`owner: user_id`). Reviewers and Admins can view and audit all documents across the organization.
+  - **Strict Fail-Closed Tenant Isolation**: Non-reviewer callers can only view and process documents with a verified matching ownership claim (`owner == user_id`). Records lacking owner metadata or marked `anonymous` strictly fail closed with **HTTP 403 Forbidden** for non-reviewers. Reviewers and Admins retain organizational oversight across all documents.
 - **Zero Shared Frontend Secrets**: Removed all hardcoded or predictable shared symmetric API keys from the SAM template and frontend client.
 - **Fail-Closed Architecture**: All pipeline stages fail closed—unauthenticated requests return HTTP 401, missing or corrupt records return HTTP 404/500 without guessing S3 paths, and approval decisions require explicit `"APPROVE"` or `"REJECT"` actions.
 - **Private Storage**: For enterprise deployments, front `DocuFlowFrontendBucket` with Amazon CloudFront using Origin Access Control (OAC).
@@ -180,7 +183,7 @@ aws s3 sync frontend/ s3://<DocuFlowFrontendBucketName>/
 ---
 
 ## 🧪 Automated Testing
-Run the comprehensive 52-test suite verifying Cognito JWT authorization, RBAC reviewer group enforcement, tenant isolation, fail-closed security, binary magic-byte inspection, multi-modal Converse API parsing, parallel fan-out, Step Functions task tokens, and decimal serialization:
+Run the comprehensive 54-test suite verifying Cognito JWT authorization, RBAC reviewer group enforcement, fail-closed tenant isolation, magic-byte inspection, multi-modal Converse API parsing, parallel fan-out, Step Functions task tokens, and decimal serialization:
 ```bash
 python -m unittest discover -s tests/unit -p "test_*.py" -v
 ```

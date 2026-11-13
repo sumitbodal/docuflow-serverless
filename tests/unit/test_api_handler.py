@@ -656,5 +656,67 @@ class TestApiHandler(unittest.TestCase):
             data = json.loads(res["body"])
             self.assertIn("Forbidden", data["error"])
 
+    def test_get_document_denies_anonymous_or_unassigned_document_with_403(self):
+        """Verifies non-reviewers cannot view records with owner: 'anonymous' or missing owner."""
+        event = {
+            "routeKey": "GET /api/documents/{id}",
+            "pathParameters": {"id": "doc-unassigned"},
+            "requestContext": {
+                "http": {"method": "GET"},
+                "authorizer": {
+                    "jwt": {
+                        "claims": {
+                            "sub": "user-alice",
+                            "email": "alice@company.com"
+                        }
+                    }
+                }
+            }
+        }
+        with patch.dict(os.environ, {"ADMIN_API_KEY": "", "DOCUFLOW_API_KEY": ""}), \
+             patch.object(api_handler_app, 'table') as mock_table:
+            mock_table.get_item.return_value = {
+                "Item": {
+                    "document_id": "doc-unassigned",
+                    "owner": "anonymous",
+                    "uploaded_by": "anonymous"
+                }
+            }
+            res = api_handler_app.lambda_handler(event, None)
+            self.assertEqual(res["statusCode"], 403)
+            data = json.loads(res["body"])
+            self.assertIn("Forbidden", data["error"])
+
+    def test_process_document_denies_anonymous_or_unassigned_document_with_403(self):
+        """Verifies non-reviewers cannot process records with owner: 'anonymous' or missing owner."""
+        event = {
+            "routeKey": "POST /api/documents/{id}/process",
+            "pathParameters": {"id": "doc-unassigned"},
+            "requestContext": {
+                "http": {"method": "POST"},
+                "authorizer": {
+                    "jwt": {
+                        "claims": {
+                            "sub": "user-alice",
+                            "email": "alice@company.com"
+                        }
+                    }
+                }
+            }
+        }
+        with patch.dict(os.environ, {"ADMIN_API_KEY": "", "DOCUFLOW_API_KEY": ""}), \
+             patch.object(api_handler_app, 'table') as mock_table:
+            mock_table.get_item.return_value = {
+                "Item": {
+                    "document_id": "doc-unassigned",
+                    "owner": "anonymous",
+                    "uploaded_by": "anonymous"
+                }
+            }
+            res = api_handler_app.lambda_handler(event, None)
+            self.assertEqual(res["statusCode"], 403)
+            data = json.loads(res["body"])
+            self.assertIn("Forbidden", data["error"])
+
 if __name__ == '__main__':
     unittest.main()

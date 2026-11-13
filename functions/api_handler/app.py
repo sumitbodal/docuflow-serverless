@@ -296,9 +296,15 @@ def handle_process_document(event, document_id):
         doc_uploader = doc.get("uploaded_by")
         user_id = caller.get("user_id")
         user_email = caller.get("email")
-        if doc_owner and doc_owner not in (user_id, "anonymous") and (not user_email or doc_uploader != user_email):
+
+        # FAIL CLOSED: Document must have an explicit owner or uploader that is NOT "anonymous"
+        # and strictly matches the caller's verified identity.
+        is_owner = bool(doc_owner and doc_owner != "anonymous" and user_id and doc_owner == user_id)
+        is_uploader = bool(doc_uploader and doc_uploader != "anonymous" and user_email and doc_uploader == user_email)
+
+        if not (is_owner or is_uploader):
             return build_response(403, {
-                "error": "Forbidden: You do not have permission to process documents belonging to another user.",
+                "error": "Forbidden: You do not have permission to process this document. Records lacking verified ownership or belonging to another user are restricted to authorized reviewers.",
                 "document_id": document_id
             })
 
@@ -453,13 +459,14 @@ def handle_list_documents(event):
 
     sanitized_items = [sanitize_document_record(i) for i in items]
     caller = get_caller_identity(event)
-    # Reviewers and Admins see all documents; standard users only see documents they own
+    # Reviewers and Admins see all documents; standard users only see documents they explicitly own
     if not caller.get("is_reviewer"):
         user_id = caller.get("user_id")
         user_email = caller.get("email")
         filtered_items = [
             i for i in sanitized_items
-            if i.get("owner") == user_id or (user_email and i.get("uploaded_by") == user_email)
+            if (i.get("owner") and i.get("owner") != "anonymous" and user_id and i.get("owner") == user_id)
+            or (i.get("uploaded_by") and i.get("uploaded_by") != "anonymous" and user_email and i.get("uploaded_by") == user_email)
         ]
         return build_response(200, {"count": len(filtered_items), "documents": filtered_items})
 
@@ -483,9 +490,15 @@ def handle_get_document(event, document_id):
             doc_uploader = item.get("uploaded_by")
             user_id = caller.get("user_id")
             user_email = caller.get("email")
-            if doc_owner and doc_owner not in (user_id, "anonymous") and (not user_email or doc_uploader != user_email):
+
+            # FAIL CLOSED: Document must have an explicit owner or uploader that is NOT "anonymous"
+            # and strictly matches the caller's verified identity.
+            is_owner = bool(doc_owner and doc_owner != "anonymous" and user_id and doc_owner == user_id)
+            is_uploader = bool(doc_uploader and doc_uploader != "anonymous" and user_email and doc_uploader == user_email)
+
+            if not (is_owner or is_uploader):
                 return build_response(403, {
-                    "error": "Forbidden: You do not have permission to view documents belonging to another user.",
+                    "error": "Forbidden: You do not have permission to view this document. Records lacking verified ownership or belonging to another user are restricted to authorized reviewers.",
                     "document_id": document_id
                 })
 
