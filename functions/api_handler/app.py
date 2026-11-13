@@ -76,8 +76,11 @@ def handle_get_upload_url(event):
             ExpiresIn=900
         )
     except Exception as e:
-        print(f"S3 presign fallback: {e}")
-        presigned_url = f"https://{DOCS_BUCKET_NAME}.s3.amazonaws.com/{s3_key}?mock_token=123"
+        print(f"S3 presigned URL generation error: {e}")
+        return build_response(500, {
+            "error": f"Failed to generate secure S3 presigned URL: {str(e)}",
+            "document_id": document_id
+        })
 
     item = {
         "PK": f"DOC#{document_id}",
@@ -98,6 +101,10 @@ def handle_get_upload_url(event):
         table.put_item(Item=decimal_serialize(item))
     except Exception as e:
         print(f"DynamoDB put_item error: {e}")
+        return build_response(500, {
+            "error": f"Failed to initialize document record in database: {str(e)}",
+            "document_id": document_id
+        })
 
     return build_response(201, {
         "document_id": document_id,
@@ -153,25 +160,37 @@ def handle_process_document(event, document_id):
         )
     except Exception as e:
         print(f"DynamoDB update error: {e}")
+        return build_response(500, {
+            "error": f"Failed to update document status to PROCESSING: {str(e)}",
+            "document_id": document_id
+        })
 
-    # 3. Start Step Functions Execution
-    execution_arn = None
-    if STATE_MACHINE_ARN:
-        try:
-            sfn_input = {
-                "document_id": str(document_id),
-                "s3_bucket": str(s3_bucket),
-                "s3_key": str(s3_key),
-                "filename": str(filename)
-            }
-            sfn_res = sfn_client.start_execution(
-                stateMachineArn=STATE_MACHINE_ARN,
-                name=f"exec-{document_id[:8]}-{int(datetime.datetime.now().timestamp())}",
-                input=json.dumps(sfn_input, default=str)
-            )
-            execution_arn = sfn_res.get("executionArn")
-        except Exception as e:
-            print(f"Step Functions start_execution: {e}")
+    # 3. Start Step Functions Execution - Fail closed if execution cannot start
+    if not STATE_MACHINE_ARN:
+        return build_response(500, {
+            "error": "STATE_MACHINE_ARN environment variable is not configured on API handler.",
+            "document_id": document_id
+        })
+
+    try:
+        sfn_input = {
+            "document_id": str(document_id),
+            "s3_bucket": str(s3_bucket),
+            "s3_key": str(s3_key),
+            "filename": str(filename)
+        }
+        sfn_res = sfn_client.start_execution(
+            stateMachineArn=STATE_MACHINE_ARN,
+            name=f"exec-{document_id[:8]}-{int(datetime.datetime.now().timestamp())}",
+            input=json.dumps(sfn_input, default=str)
+        )
+        execution_arn = sfn_res.get("executionArn")
+    except Exception as e:
+        print(f"Step Functions start_execution error: {e}")
+        return build_response(500, {
+            "error": f"Failed to start Step Functions workflow execution: {str(e)}",
+            "document_id": document_id
+        })
 
     return build_response(200, {
         "document_id": document_id,

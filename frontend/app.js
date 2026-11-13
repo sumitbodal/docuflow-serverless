@@ -144,43 +144,71 @@ function setupEventListeners() {
 
 async function handleFileUpload(file) {
   if (API_BASE_URL) {
+    const stepUpload = document.getElementById("step-upload");
+    const stepParallel = document.getElementById("step-parallel");
+    const stepScore = document.getElementById("step-score");
+    const stepChoice = document.getElementById("step-choice");
+    const stepDispatch = document.getElementById("step-dispatch");
+
+    const resetSteps = () => {
+      [stepUpload, stepParallel, stepScore, stepChoice, stepDispatch].forEach(el => {
+        el.className = "step-item";
+        el.querySelector(".step-status").innerText = "⏳";
+      });
+    };
+
+    const markError = (stepEl, errMsg) => {
+      stepEl.className = "step-item flagged";
+      stepEl.querySelector(".step-status").innerText = "❌";
+      alert(errMsg);
+    };
+
+    resetSteps();
+    stepUpload.className = "step-item running";
+    stepUpload.querySelector(".step-status").innerText = "🔄";
+
     try {
-      const stepUpload = document.getElementById("step-upload");
-      const stepParallel = document.getElementById("step-parallel");
-      const stepScore = document.getElementById("step-score");
-      const stepChoice = document.getElementById("step-choice");
-      const stepDispatch = document.getElementById("step-dispatch");
-
-      stepUpload.className = "step-item running";
-      stepUpload.querySelector(".step-status").innerText = "🔄";
-
       // 1. Get presigned upload URL from API Gateway
       const presignRes = await fetch(`${API_BASE_URL}/api/upload-url`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename: file.name, content_type: file.type || "application/pdf" })
       });
+      if (!presignRes.ok) {
+        const errJson = await presignRes.json().catch(() => ({}));
+        markError(stepUpload, `Failed to get presigned upload URL (${presignRes.status}): ${errJson.error || presignRes.statusText}`);
+        return;
+      }
       const presignData = await presignRes.json();
       const docId = presignData.document_id;
 
       // 2. Upload file directly to S3 bucket via presigned URL
-      await fetch(presignData.upload_url, {
+      const uploadRes = await fetch(presignData.upload_url, {
         method: "PUT",
         headers: { "Content-Type": file.type || "application/pdf" },
         body: file
       });
+      if (!uploadRes.ok) {
+        markError(stepUpload, `S3 upload failed (${uploadRes.status}): ${uploadRes.statusText}`);
+        return;
+      }
       stepUpload.className = "step-item success";
       stepUpload.querySelector(".step-status").innerText = "✅";
 
       // 3. Trigger Step Functions execution post-upload
       stepParallel.className = "step-item running";
       stepParallel.querySelector(".step-status").innerText = "⨂";
-      await fetch(`${API_BASE_URL}/api/documents/${docId}/process`, {
+      const processRes = await fetch(`${API_BASE_URL}/api/documents/${docId}/process`, {
         method: "POST"
       });
+      if (!processRes.ok) {
+        const errJson = await processRes.json().catch(() => ({}));
+        markError(stepParallel, `Step Functions trigger failed (${processRes.status}): ${errJson.error || processRes.statusText}`);
+        return;
+      }
 
       // 4. Poll document status to update live stepper
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 8; i++) {
         await new Promise(r => setTimeout(r, 1500));
         const docRes = await fetch(`${API_BASE_URL}/api/documents/${docId}`);
         if (docRes.ok) {
@@ -193,6 +221,9 @@ async function handleFileUpload(file) {
             if (doc.status === "PENDING_APPROVAL") {
               stepChoice.className = "step-item flagged";
               stepChoice.querySelector(".step-status").innerText = "⏸️";
+            } else if (doc.status === "FAILED") {
+              stepChoice.className = "step-item flagged";
+              stepChoice.querySelector(".step-status").innerText = "❌";
             } else {
               stepChoice.className = "step-item success";
               stepChoice.querySelector(".step-status").innerText = "✅";
@@ -207,7 +238,8 @@ async function handleFileUpload(file) {
       await fetchDocuments();
       return;
     } catch (err) {
-      console.warn("Real upload error, falling back to visualizer simulation:", err);
+      markError(stepUpload, `Network or server error during document processing: ${err.message}`);
+      return;
     }
   }
 

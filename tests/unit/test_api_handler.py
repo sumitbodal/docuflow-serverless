@@ -45,6 +45,36 @@ class TestApiHandler(unittest.TestCase):
                     # SFN must NOT be triggered until document is uploaded
                     mock_sfn.start_execution.assert_not_called()
 
+    def test_upload_url_generation_fails_closed_when_s3_presign_errors(self):
+        """Verifies upload-url returns HTTP 500 if S3 presigning fails, rejecting synthetic URLs."""
+        event = {
+            "routeKey": "POST /api/upload-url",
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({"filename": "invoice.pdf", "content_type": "application/pdf"})
+        }
+        with patch.object(api_handler_app, 's3_client') as mock_s3:
+            mock_s3.generate_presigned_url.side_effect = Exception("S3ClientError: AccessDenied")
+            res = api_handler_app.lambda_handler(event, None)
+            self.assertEqual(res["statusCode"], 500)
+            data = json.loads(res["body"])
+            self.assertIn("Failed to generate secure S3 presigned URL", data["error"])
+
+    def test_upload_url_generation_fails_closed_when_dynamo_put_errors(self):
+        """Verifies upload-url returns HTTP 500 if DynamoDB record initialization fails."""
+        event = {
+            "routeKey": "POST /api/upload-url",
+            "requestContext": {"http": {"method": "POST"}},
+            "body": json.dumps({"filename": "invoice.pdf", "content_type": "application/pdf"})
+        }
+        with patch.object(api_handler_app, 's3_client') as mock_s3:
+            with patch.object(api_handler_app, 'table') as mock_table:
+                mock_s3.generate_presigned_url.return_value = "https://real-presigned.s3.amazonaws.com/uploads/xyz/invoice.pdf"
+                mock_table.put_item.side_effect = Exception("DynamoDBProvisionedThroughputExceeded")
+                res = api_handler_app.lambda_handler(event, None)
+                self.assertEqual(res["statusCode"], 500)
+                data = json.loads(res["body"])
+                self.assertIn("Failed to initialize document record", data["error"])
+
     def test_process_document_starts_sfn_execution(self):
         event = {
             "routeKey": "POST /api/documents/doc-12345/process",
@@ -67,6 +97,31 @@ class TestApiHandler(unittest.TestCase):
                     res = api_handler_app.lambda_handler(event, None)
                     self.assertEqual(res["statusCode"], 200)
                     mock_sfn.start_execution.assert_called_once()
+
+    def test_process_document_fails_closed_when_sfn_start_errors(self):
+        """Verifies process endpoint returns HTTP 500 when Step Functions execution fails to start."""
+        event = {
+            "routeKey": "POST /api/documents/doc-12345/process",
+            "pathParameters": {"id": "doc-12345"},
+            "requestContext": {"http": {"method": "POST"}}
+        }
+        with patch.object(api_handler_app, 'table') as mock_table:
+            mock_table.get_item.return_value = {
+                "Item": {
+                    "document_id": "doc-12345",
+                    "filename": "invoice.pdf",
+                    "s3_key": "uploads/doc-12345/invoice.pdf",
+                    "s3_bucket": "test-bucket"
+                }
+            }
+            with patch.object(api_handler_app, 's3_client') as mock_s3:
+                mock_s3.head_object.return_value = {"ContentLength": 1024}
+                with patch.object(api_handler_app, 'sfn_client') as mock_sfn:
+                    mock_sfn.start_execution.side_effect = Exception("StepFunctionsExecutionLimitExceeded")
+                    res = api_handler_app.lambda_handler(event, None)
+                    self.assertEqual(res["statusCode"], 500)
+                    data = json.loads(res["body"])
+                    self.assertIn("Failed to start Step Functions workflow execution", data["error"])
 
     def test_process_document_fails_closed_when_s3_missing(self):
         event = {
