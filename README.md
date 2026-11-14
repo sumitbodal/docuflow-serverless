@@ -54,12 +54,12 @@ flowchart TD
     L_Extract["λ DocuFlow-Extractor: Amazon Bedrock Multi-Modal Nova Lite"]
     L_Score["λ DocuFlow-RiskScorer: Anomaly & Heuristic Fraud Scoring"]
 
-    Client -->|1. POST /api/upload-url with Cognito JWT| APIGW
+    Client -->|"1. POST /api/upload-url with Cognito JWT"| APIGW
     APIGW --> L_Init
-    L_Init -->|Return Presigned S3 PUT URL| Client
-    Client -->|2. Direct Browser-to-S3 Upload| S3Docs
-    Client -->|3. POST /api/documents/{id}/process| APIGW
-    APIGW -.->|Trigger State Machine| SFN
+    L_Init -->|"Return Presigned S3 PUT URL"| Client
+    Client -->|"2. Direct Browser-to-S3 Upload"| S3Docs
+    Client -->|"3. POST /api/documents/:id/process"| APIGW
+    APIGW -.->|"Trigger State Machine"| SFN
 
     subgraph StepFunctionsStateMachine ["AWS Step Functions State Machine (Orchestration & Direct SDK)"]
         SFN --> L_Validate
@@ -67,21 +67,21 @@ flowchart TD
         L_Extract --> L_Score
         L_Score --> ChoiceState{"Risk Score >= 70?"}
         
-        ChoiceState -->|High Risk: Anomaly Flag| WaitForReview["Task: waitForTaskToken\n(Stores TaskToken in DynamoDB & Publishes SNS Alert)"]
-        ChoiceState -->|Low Risk: Safe| AutoApprove["Pass: AutoApprove\n(Status: APPROVED)"]
+        ChoiceState -->|"High Risk: Anomaly Flag"| WaitForReview["Task: waitForTaskToken\n(Stores TaskToken in DynamoDB & Publishes SNS Alert)"]
+        ChoiceState -->|"Low Risk: Safe"| AutoApprove["Pass: AutoApprove\n(Status: APPROVED)"]
         
         WaitForReview --> DDB_Direct["Task: dynamodb:updateItem\n(Direct SDK Write without Lambda)"]
         AutoApprove --> DDB_Direct
         DDB_Direct --> SNS_Direct["Task: sns:publish\n(Direct SDK Publish without Lambda)"]
     end
 
-    WaitForReview -.->|Publishes Approval Alert Email| SNS
-    Client -->|4. POST /api/documents/{id}/approve (sendTaskSuccess)| APIGW
+    WaitForReview -.->|"Publishes Approval Alert Email"| SNS
+    Client -->|"4. POST /api/documents/:id/approve (sendTaskSuccess)"| APIGW
     APIGW --> L_Init
-    L_Init -.->|sfn:SendTaskSuccess| SFN
-    DDB_Direct -->|Persist Audit Record| DDB
-    SNS_Direct -->|Alert Completion| SNS
-    APIGW -->|5. GET /api/documents Query Audit Trail| DDB
+    L_Init -.->|"sfn:SendTaskSuccess"| SFN
+    DDB_Direct -->|"Persist Audit Record"| DDB
+    SNS_Direct -->|"Alert Completion"| SNS
+    APIGW -->|"5. GET /api/documents Query Audit Trail"| DDB
 ```
 
 ---
