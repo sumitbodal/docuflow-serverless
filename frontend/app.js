@@ -1,9 +1,13 @@
 // DocuFlow AI - Frontend Controller (Updated with Parallel & TaskToken Orchestration)
 
-let API_BASE_URL = localStorage.getItem("DOCUFLOW_API_URL") || "";
+const DEFAULT_API_BASE_URL = "https://z9okxb9r8j.execute-api.us-east-1.amazonaws.com";
+const DEFAULT_COGNITO_CLIENT_ID = "7a4ohh6j10s38a4cio8frddanr";
+const DEFAULT_AWS_REGION = "us-east-1";
+
+let API_BASE_URL = localStorage.getItem("DOCUFLOW_API_URL") || DEFAULT_API_BASE_URL;
 let API_AUTH_TOKEN = localStorage.getItem("DOCUFLOW_COGNITO_TOKEN") || localStorage.getItem("DOCUFLOW_AUTH_TOKEN") || "";
-let COGNITO_CLIENT_ID = localStorage.getItem("DOCUFLOW_COGNITO_CLIENT_ID") || "";
-let AWS_REGION = localStorage.getItem("DOCUFLOW_AWS_REGION") || "us-east-1";
+let COGNITO_CLIENT_ID = localStorage.getItem("DOCUFLOW_COGNITO_CLIENT_ID") || DEFAULT_COGNITO_CLIENT_ID;
+let AWS_REGION = localStorage.getItem("DOCUFLOW_AWS_REGION") || DEFAULT_AWS_REGION;
 let USER_EMAIL = localStorage.getItem("DOCUFLOW_USER_EMAIL") || "";
 let USER_ROLE = localStorage.getItem("DOCUFLOW_USER_ROLE") || "";
 
@@ -277,6 +281,7 @@ function setupEventListeners() {
 
       if (!email || !password || !clientId) {
         if (authStatusMsg) {
+          authStatusMsg.style.display = "block";
           authStatusMsg.className = "auth-status-msg error";
           authStatusMsg.innerText = "Please provide Cognito Client ID, Email, and Password.";
         }
@@ -285,7 +290,11 @@ function setupEventListeners() {
 
       cognitoLoginBtn.disabled = true;
       cognitoLoginBtn.innerText = "Authenticating with AWS Cognito...";
-      if (authStatusMsg) authStatusMsg.style.display = "none";
+      if (authStatusMsg) {
+        authStatusMsg.style.display = "none";
+        authStatusMsg.className = "auth-status-msg";
+        authStatusMsg.innerText = "";
+      }
 
       try {
         const tokens = await loginWithCognito(email, password, clientId, region);
@@ -312,6 +321,7 @@ function setupEventListeners() {
         }
 
         if (authStatusMsg) {
+          authStatusMsg.style.display = "block";
           authStatusMsg.className = "auth-status-msg success";
           authStatusMsg.innerText = `Signed in successfully as ${USER_EMAIL} (${USER_ROLE})!`;
         }
@@ -320,9 +330,10 @@ function setupEventListeners() {
           configModal.classList.remove("show");
           updateAuthUI();
           fetchDocuments();
-        }, 800);
+        }, 1200);
       } catch (err) {
         if (authStatusMsg) {
+          authStatusMsg.style.display = "block";
           authStatusMsg.className = "auth-status-msg error";
           authStatusMsg.innerText = err.message || "Failed to authenticate with Cognito.";
         }
@@ -602,8 +613,20 @@ async function executePipelineVisualizer(docId, filename) {
 }
 
 async function fetchDocuments() {
+  const originalText = refreshBtn ? refreshBtn.innerText : "🔄 Refresh Table";
+  if (refreshBtn) {
+    refreshBtn.disabled = true;
+    refreshBtn.innerText = "🔄 Fetching live records...";
+  }
+
   if (!API_BASE_URL) {
-    renderDocumentsTable();
+    setTimeout(() => {
+      renderDocumentsTable();
+      if (refreshBtn) {
+        refreshBtn.disabled = false;
+        refreshBtn.innerText = originalText;
+      }
+    }, 300);
     return;
   }
 
@@ -611,14 +634,37 @@ async function fetchDocuments() {
     const res = await fetch(`${API_BASE_URL}/api/documents`, {
       headers: getAuthHeaders()
     });
+
+    if (res.status === 401 || res.status === 403) {
+      console.warn("Unauthorized to fetch live DynamoDB documents. Please sign in via Cognito or enter an API Key.");
+      renderDocumentsTable();
+      return;
+    }
+
+    if (!res.ok) {
+      console.warn(`API returned HTTP ${res.status} when listing documents.`);
+      renderDocumentsTable();
+      return;
+    }
+
     const data = await res.json();
-    if (data.documents && data.documents.length > 0) {
-      localDocuments = data.documents;
+    if (data.documents && Array.isArray(data.documents)) {
+      if (data.documents.length > 0) {
+        localDocuments = data.documents;
+      }
     }
     renderDocumentsTable();
   } catch (err) {
     console.warn("API Gateway request error, using local dataset:", err);
     renderDocumentsTable();
+  } finally {
+    if (refreshBtn) {
+      refreshBtn.disabled = false;
+      refreshBtn.innerText = "✓ Refreshed";
+      setTimeout(() => {
+        refreshBtn.innerText = originalText;
+      }, 1000);
+    }
   }
 }
 
