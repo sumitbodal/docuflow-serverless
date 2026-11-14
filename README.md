@@ -17,7 +17,6 @@
 - **Interactive Web Dashboard**: [http://docuflow-frontend-986523046664-us-east-1-an.s3-website-us-east-1.amazonaws.com/](http://docuflow-frontend-986523046664-us-east-1-an.s3-website-us-east-1.amazonaws.com/)
 - **API Gateway Base URL**: `https://z9okxb9r8j.execute-api.us-east-1.amazonaws.com`
 - **AWS Region**: `us-east-1` (US East, N. Virginia)
-- **AWS Account ID**: `986523046664`
 - **Cognito User Pool ID**: `us-east-1_sO92E2WYK` (Client ID: `7a4ohh6j10s38a4cio8frddanr`)
 
 ---
