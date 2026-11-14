@@ -163,7 +163,7 @@
         "risk.$": "$.risk",
         "extracted_data.$": "$.extracted_data",
         "security_scan.$": "$.security_scan",
-        "message": "Low anomaly risk score; straight-through processing auto-approved."
+        "message": "Low anomaly risk score; straight-through intake triage passed. Notice: Does not authorize financial disbursement without ERP 3-way match and verified bank master data."
       },
       "Next": "UpdateDynamoDBStatus"
     },

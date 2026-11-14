@@ -158,6 +158,11 @@ def calculate_anomaly_risk(extracted_data: dict, security_scan: dict = None) -> 
         "vendor_identity_verified": vendor_identity_verified,
         "factors": risk_factors,
         "registry_notice": DEMO_REGISTRY_NOTICE,
+        "payment_approval_guardrail": {
+            "authorized_for_payment_disbursement": False,
+            "intake_triage_only": True,
+            "disclaimer": "Intake triage decision only. Straight-through approval does NOT authorize financial disbursement without secondary out-of-band banking & ERP 3-way match."
+        },
         "evaluated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
     }
 

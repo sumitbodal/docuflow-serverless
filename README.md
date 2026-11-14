@@ -180,10 +180,23 @@ aws s3 sync frontend/ s3://<DocuFlowFrontendBucketName>/
 - **Fail-Closed Architecture**: All pipeline stages fail closed—unauthenticated requests return HTTP 401, missing or corrupt records return HTTP 404/500 without guessing S3 paths, and approval decisions require explicit `"APPROVE"` or `"REJECT"` actions.
 - **Private Storage**: For enterprise deployments, front `DocuFlowFrontendBucket` with Amazon CloudFront using Origin Access Control (OAC).
 
+### ⚠️ Critical Enterprise Threat Model: Why Invoice Consistency Checks ≠ Supplier Authentication
+
+> [!IMPORTANT]
+> **Threat Modeling Notice on Invoice Identity Verification**:
+> DocuFlow AI provides intelligent document intake, extraction, and heuristic consistency matching against a demo registry. However, **all extracted details (vendor name, Tax ID, domain) originate from the untrusted uploaded document itself**.
+>
+> A fraudster can easily obtain a legitimate enterprise vendor's publicly available name, VAT/Tax ID, and corporate domain and print them verbatim onto a fraudulent invoice while changing the wire transfer / bank account details. Therefore:
+> 1. **Do not rely on invoice-extracted details alone for payment release**: Auto-approval in this challenge architecture represents *intake triage approval* (validating format, structure, and anomaly scoring), **not** financial disbursement approval.
+> 2. **Production Enterprise Requirements for Payment Execution**:
+>    - **Out-of-Band 3-Way Matching**: Integration with enterprise ERP/P.O. systems (SAP, Coupa, Workday) to verify that an approved Purchase Order and verified Goods Receipt match the billed line items.
+>    - **Supplier Master Bank Verification**: Remittances must strictly use pre-verified bank accounts from the corporate supplier master database, completely ignoring any bank accounts or payment instructions printed on the face of an invoice.
+>    - **Dual-Control Human Authorization**: Any high-value or non-PO disbursements must enforce multi-person approval policies with verified vendor callbacks.
+
 ---
 
 ## 🧪 Automated Testing
-Run the comprehensive 54-test suite verifying Cognito JWT authorization, RBAC reviewer group enforcement, fail-closed tenant isolation, magic-byte inspection, multi-modal Converse API parsing, parallel fan-out, Step Functions task tokens, and decimal serialization:
+Run the comprehensive 75-test suite verifying Cognito JWT authorization, RBAC reviewer group enforcement, fail-closed tenant isolation, magic-byte inspection, multi-modal Converse API parsing, independent corroboration enforcement, Step Functions task tokens, and decimal serialization:
 ```bash
 python -m unittest discover -s tests/unit -p "test_*.py" -v
 ```

@@ -257,6 +257,11 @@ def verify_vendor_against_registry(extracted_vendor: str, extracted_tax_id: str 
         "domain": norm_dom if norm_dom else reg_dom,
         "registry_source": "demo_sample_registry",
         "demo_data_notice": DEMO_SAMPLE_REGISTRY_NOTICE,
+        "supplier_verification_limitations": {
+            "verified_against_external_supplier_source": False,
+            "source": "untrusted_document_payload_matched_against_demo_registry",
+            "warning": "DO NOT USE FOR DIRECT PAYMENT DISBURSEMENT. Invoice details (name, tax ID, domain) were extracted from the untrusted document itself. Copied legitimate credentials on forged payment advice require secondary out-of-band banking/ERP verification."
+        },
         "reason": reason
     }
 
@@ -394,6 +399,7 @@ def extract_with_bedrock(content_bytes: bytes, filename: str, document_id: str):
             parsed["requires_manual_review"] = verification.get("requires_manual_review", False)
             parsed["registry_source"] = verification.get("registry_source", "demo_sample_registry")
             parsed["demo_data_notice"] = verification.get("demo_data_notice", DEMO_SAMPLE_REGISTRY_NOTICE)
+            parsed["supplier_verification_limitations"] = verification.get("supplier_verification_limitations", {})
             if verification.get("tax_id_mismatch"):
                 parsed["tax_id_mismatch"] = True
             if verification.get("tax_id"):
@@ -553,7 +559,8 @@ def parse_document_content_rules(content_bytes: bytes, filename: str, document_i
         "tax_id_mismatch": verification.get("tax_id_mismatch", False),
         "requires_manual_review": verification.get("requires_manual_review", False),
         "registry_source": verification.get("registry_source", "demo_sample_registry"),
-        "demo_data_notice": verification.get("demo_data_notice", DEMO_SAMPLE_REGISTRY_NOTICE)
+        "demo_data_notice": verification.get("demo_data_notice", DEMO_SAMPLE_REGISTRY_NOTICE),
+        "supplier_verification_limitations": verification.get("supplier_verification_limitations", {})
     }
 
     today = datetime.date.today()
@@ -573,6 +580,7 @@ def parse_document_content_rules(content_bytes: bytes, filename: str, document_i
             "requires_manual_review": matched_vendor.get("requires_manual_review", False),
             "registry_source": matched_vendor.get("registry_source", "demo_sample_registry"),
             "demo_data_notice": matched_vendor.get("demo_data_notice", DEMO_SAMPLE_REGISTRY_NOTICE),
+            "supplier_verification_limitations": matched_vendor.get("supplier_verification_limitations", {}),
             "currency": "USD",
             "subtotal": 0.0,
             "tax_rate": 0.0,
@@ -608,6 +616,7 @@ def parse_document_content_rules(content_bytes: bytes, filename: str, document_i
         "requires_manual_review": matched_vendor.get("requires_manual_review", False),
         "registry_source": matched_vendor.get("registry_source", "demo_sample_registry"),
         "demo_data_notice": matched_vendor.get("demo_data_notice", DEMO_SAMPLE_REGISTRY_NOTICE),
+        "supplier_verification_limitations": matched_vendor.get("supplier_verification_limitations", {}),
         "currency": "USD",
         "subtotal": round(extracted_amount, 2),
         "tax_rate": tax_rate,
