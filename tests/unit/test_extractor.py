@@ -132,6 +132,8 @@ class TestExtractor(unittest.TestCase):
         sample_invoice_text = (
             "INVOICE\n"
             "Vendor: GitHub Inc (Microsoft)\n"
+            "Tax ID: US94320984\n"
+            "Domain: github.com\n"
             "Invoice #: INV-98765\n"
             "Date: 2026-11-01\n"
             "Line Item: Enterprise Plan Licenses\n"
@@ -158,7 +160,38 @@ class TestExtractor(unittest.TestCase):
                     self.assertEqual(data["vendor"], "GitHub Inc (Microsoft)")
                     self.assertEqual(data["subtotal"], 540.00)
                     self.assertTrue(data["vendor_trusted"])
+                    self.assertTrue(data["vendor_identity_verified"])
                     self.assertIn("Fallback", data["ai_model_used"])
+
+    def test_exact_registered_vendor_name_without_corroboration_fails_trust(self):
+        """Verifies an invoice with exact registered name but NO Tax ID/domain is NOT trusted."""
+        sample_invoice_text = (
+            "INVOICE\n"
+            "Vendor: Amazon Web Services EMEA\n"
+            "Invoice #: INV-FAKE-CORROB-1\n"
+            "Total: $1,200.00\n"
+        ).encode('utf-8')
+
+        event = {
+            "document_id": "doc-uncorroborated-aws",
+            "filename": "forged_aws.pdf",
+            "s3_bucket": "test-bucket",
+            "s3_key": "uploads/doc-uncorroborated-aws/forged_aws.pdf"
+        }
+        with patch.object(extractor_app, 'table'):
+            with patch.object(extractor_app, 's3_client') as mock_s3:
+                with patch.object(extractor_app, 'bedrock_runtime') as mock_bedrock:
+                    mock_s3.get_object.return_value = {"Body": BytesIO(sample_invoice_text)}
+                    mock_bedrock.converse.side_effect = Exception("ModelUnavailable")
+
+                    result = extractor_app.lambda_handler(event, None)
+                    data = result["extracted_data"]
+                    self.assertEqual(data["vendor"], "Amazon Web Services EMEA")
+                    self.assertTrue(data["vendor_registry_match"])
+                    # MUST FAIL TRUST AND INDEPENDENT VERIFICATION:
+                    self.assertFalse(data["vendor_trusted"])
+                    self.assertFalse(data["vendor_identity_verified"])
+                    self.assertTrue(data["requires_manual_review"])
 
     def test_suspicious_offshore_vendor_extraction(self):
         sample_suspicious_text = (
@@ -305,12 +338,22 @@ class TestExtractor(unittest.TestCase):
                     self.assertTrue(data.get("tax_id_mismatch"))
 
     def test_verify_vendor_against_registry_strictness(self):
-        """Direct test of verify_vendor_against_registry for exact matching and domain checks."""
-        # Exact match
+        """Direct test of verify_vendor_against_registry for exact matching, corroboration, and domain checks."""
+        # Exact match with independent corroboration (Tax ID + domain)
         ok_match = extractor_app.verify_vendor_against_registry("Amazon Web Services EMEA", "LU26375245", "aws.amazon.com")
         self.assertTrue(ok_match["matched"])
         self.assertTrue(ok_match["trusted"])
         self.assertTrue(ok_match["independent_verified"])
+        self.assertFalse(ok_match["requires_manual_review"])
+        self.assertEqual(ok_match["registry_source"], "demo_sample_registry")
+        self.assertIn("DEMO_DATA_ONLY", ok_match["demo_data_notice"])
+
+        # Exact match WITHOUT independent corroboration (name only, no Tax ID/domain) - MUST NOT BE TRUSTED
+        uncorroborated = extractor_app.verify_vendor_against_registry("Amazon Web Services EMEA")
+        self.assertTrue(uncorroborated["matched"])
+        self.assertFalse(uncorroborated["trusted"])
+        self.assertFalse(uncorroborated["independent_verified"])
+        self.assertTrue(uncorroborated["requires_manual_review"])
 
         # Substring attempt
         sub_match = extractor_app.verify_vendor_against_registry("AWS Security LLC")

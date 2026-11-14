@@ -29,7 +29,10 @@ class TestRiskScorer(unittest.TestCase):
                     "document_id": "doc-parallel-123",
                     "extracted_data": {
                         "vendor": "Amazon Web Services EMEA",
+                        "tax_id": "LU26375245",
                         "vendor_trusted": True,
+                        "vendor_registry_match": True,
+                        "vendor_identity_verified": True,
                         "grand_total": 1420.50
                     }
                 },
@@ -139,6 +142,57 @@ class TestRiskScorer(unittest.TestCase):
             # Must be penalized +45 for untrusted entity despite vendor_trusted: True
             self.assertGreaterEqual(risk["score"], 50)
             self.assertTrue(any("Untrusted or unregistered offshore entity" in f for f in risk["factors"]))
+
+    def test_uncorroborated_registered_vendor_claims_prevented_from_auto_approval(self):
+        """Verifies a forged invoice with exact registered name but no Tax ID/domain is routed to manual review."""
+        event = {
+            "document_id": "doc-forged-aws-no-corroboration",
+            "extracted_data": {
+                "vendor": "Amazon Web Services EMEA",
+                "vendor_registry_match": True,
+                "vendor_identity_verified": False,  # Missing Tax ID and domain corroboration
+                "vendor_trusted": False,            # Extractor rejected trust
+                "grand_total": 1200.00              # Low amount that previously could have been auto-approved!
+            },
+            "security_scan": {"format_whitelisted": True, "size_within_limits": True}
+        }
+        with patch.object(risk_scorer_app, 'table'):
+            result = risk_scorer_app.lambda_handler(event, None)
+            risk = result["risk"]
+            # Auto-approval MUST be prevented:
+            self.assertFalse(risk["vendor_trusted"])
+            self.assertFalse(risk["vendor_identity_verified"])
+            self.assertTrue(risk["requires_manual_review"])
+            self.assertGreaterEqual(risk["score"], 70)
+            self.assertEqual(risk["level"], "HIGH")
+            self.assertEqual(risk["recommendation"], "FLAG_FOR_MANUAL_REVIEW")
+            self.assertTrue(any("Uncorroborated vendor claim" in f for f in risk["factors"]))
+            self.assertIn("DEMO_DATA_ONLY", risk["registry_notice"])
+
+    def test_corroborated_vendor_with_tax_id_eligible_for_auto_approval(self):
+        """Verifies an invoice with exact name AND verified Tax ID corroboration is trusted and eligible for auto-approval."""
+        event = {
+            "document_id": "doc-valid-aws",
+            "extracted_data": {
+                "vendor": "Amazon Web Services EMEA",
+                "tax_id": "LU26375245",
+                "vendor_domain": "aws.amazon.com",
+                "vendor_registry_match": True,
+                "vendor_identity_verified": True,
+                "vendor_trusted": True,
+                "grand_total": 1200.00
+            },
+            "security_scan": {"format_whitelisted": True, "size_within_limits": True}
+        }
+        with patch.object(risk_scorer_app, 'table'):
+            result = risk_scorer_app.lambda_handler(event, None)
+            risk = result["risk"]
+            self.assertTrue(risk["vendor_trusted"])
+            self.assertTrue(risk["vendor_identity_verified"])
+            self.assertFalse(risk["requires_manual_review"])
+            self.assertLess(risk["score"], 35)
+            self.assertEqual(risk["level"], "LOW")
+            self.assertEqual(risk["recommendation"], "AUTO_APPROVE")
 
     def test_review_handler_waitForTaskToken(self):
         event = {

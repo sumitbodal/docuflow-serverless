@@ -24,6 +24,12 @@ def normalize_vendor_identity(val: str) -> str:
         return ""
     return re.sub(r'[^a-zA-Z0-9]+', ' ', str(val).lower()).strip()
 
+# Demo Bootstrap Dataset Notice:
+# In an enterprise production deployment, EXACT_TRUSTED_VENDORS must be backed by an
+# authoritative ERP/Procurement master (e.g. SAP, Coupa, Workday). The hard-coded set below
+# is treated as demo fixture data and requires independent corroboration before granting trust.
+DEMO_REGISTRY_NOTICE = "DEMO_DATA_ONLY: Local trusted registry is sample data. Production verification requires ERP corroboration."
+
 # Strict list of canonical trusted vendor identities - NO substring matches permitted
 EXACT_TRUSTED_VENDORS = {
     "amazon web services emea sarl",
@@ -64,25 +70,23 @@ def calculate_anomaly_risk(extracted_data: dict, security_scan: dict = None) -> 
     registry_matched = bool(extracted_data.get("vendor_registry_match", False))
     vendor_declared_trusted = bool(extracted_data.get("vendor_trusted", False))
     tax_id_mismatch = bool(extracted_data.get("tax_id_mismatch", False))
+    vendor_identity_verified = bool(extracted_data.get("vendor_identity_verified", False))
+    requires_manual_review_flag = bool(extracted_data.get("requires_manual_review", False))
 
-    # Strict Fail-Closed Verification:
+    # Strict Fail-Closed Independent Corroboration:
     # A vendor is ONLY trusted if:
-    # 1. No identity or Tax ID mismatch was detected.
-    # 2. It has an exact normalized match against the trusted registry (NO substring matching).
-    # 3. If registry match metadata is provided, it must be verified True.
-    if "vendor_registry_match" in extracted_data:
-        vendor_trusted = bool(
-            vendor_declared_trusted and 
-            registry_matched and 
-            has_exact_trusted_match and 
-            not tax_id_mismatch
-        )
-    else:
-        vendor_trusted = bool(
-            vendor_declared_trusted and 
-            has_exact_trusted_match and 
-            not tax_id_mismatch
-        )
+    # 1. No identity or Tax ID mismatch was detected (not tax_id_mismatch).
+    # 2. It has an exact normalized match against trusted identities (has_exact_trusted_match).
+    # 3. Server-side registry match confirmed (registry_matched).
+    # 4. Independent corroboration (Tax ID / domain) was explicitly verified on the document (vendor_identity_verified == True).
+    # 5. Extractor confirmed trust decision (vendor_declared_trusted == True).
+    vendor_trusted = bool(
+        vendor_declared_trusted and 
+        registry_matched and 
+        has_exact_trusted_match and 
+        vendor_identity_verified and 
+        not tax_id_mismatch
+    )
 
     grand_total = float(extracted_data.get("grand_total", 0.0))
 
@@ -93,6 +97,10 @@ def calculate_anomaly_risk(extracted_data: dict, security_scan: dict = None) -> 
     if tax_id_mismatch:
         risk_score += 65
         risk_factors.append(f"CRITICAL: Identity Spoofing Detected! Tax ID on document does not match verified registry record for '{vendor}' (+65)")
+    elif has_exact_trusted_match and not vendor_identity_verified:
+        # Forged invoice risk: invoice uses a registered vendor's exact name without independent corroboration (Tax ID or domain)
+        risk_score += 60
+        risk_factors.append(f"Uncorroborated vendor claim: Document uses registered name '{vendor}' without verified Tax ID or domain corroboration. Routed to manual review to prevent forged invoice auto-approval (+60)")
     elif not vendor_trusted:
         risk_score += 45
         risk_factors.append(f"Untrusted or unregistered offshore entity: '{vendor}' (+45)")
@@ -116,7 +124,22 @@ def calculate_anomaly_risk(extracted_data: dict, security_scan: dict = None) -> 
 
     risk_score = min(100, max(0, risk_score))
 
-    if risk_score >= 70:
+    # Defense-in-depth routing:
+    # If a document lacks independent corroboration, is untrusted, or had extraction/identity issues,
+    # strictly fail closed to manual review (risk_score >= 70, FLAG_FOR_MANUAL_REVIEW).
+    must_route_to_manual_review = (
+        not vendor_trusted or 
+        tax_id_mismatch or 
+        (has_exact_trusted_match and not vendor_identity_verified) or
+        requires_manual_review_flag or
+        extracted_data.get("extraction_status") == "EXTRACTION_FAILED"
+    )
+
+    if must_route_to_manual_review:
+        risk_score = max(risk_score, 70)
+        risk_level = "HIGH"
+        recommendation = "FLAG_FOR_MANUAL_REVIEW"
+    elif risk_score >= 70:
         risk_level = "HIGH"
         recommendation = "FLAG_FOR_MANUAL_REVIEW"
     elif risk_score >= 35:
@@ -130,7 +153,11 @@ def calculate_anomaly_risk(extracted_data: dict, security_scan: dict = None) -> 
         "score": risk_score,
         "level": risk_level,
         "recommendation": recommendation,
+        "requires_manual_review": must_route_to_manual_review,
+        "vendor_trusted": vendor_trusted,
+        "vendor_identity_verified": vendor_identity_verified,
         "factors": risk_factors,
+        "registry_notice": DEMO_REGISTRY_NOTICE,
         "evaluated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
     }
 

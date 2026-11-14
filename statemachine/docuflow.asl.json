@@ -106,8 +106,24 @@
       "Type": "Choice",
       "Choices": [
         {
-          "Variable": "$.risk.score",
-          "NumericGreaterThanEquals": 70,
+          "Or": [
+            {
+              "Variable": "$.risk.score",
+              "NumericGreaterThanEquals": 70
+            },
+            {
+              "Variable": "$.risk.requires_manual_review",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.risk.vendor_trusted",
+              "BooleanEquals": false
+            },
+            {
+              "Variable": "$.risk.recommendation",
+              "StringEquals": "FLAG_FOR_MANUAL_REVIEW"
+            }
+          ],
           "Next": "RequestManualApproval"
         }
       ],

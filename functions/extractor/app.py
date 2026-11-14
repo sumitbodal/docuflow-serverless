@@ -22,6 +22,21 @@ TABLE_NAME = os.environ.get('TABLE_NAME', 'DocuFlowRecords')
 BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'amazon.nova-lite-v1:0')
 table = dynamodb.Table(TABLE_NAME)
 
+# ==============================================================================
+# DEMO BOOTSTRAP DATASET ONLY - NOT PRODUCTION PROCUREMENT MASTER
+#
+# NOTE: This in-memory registry serves strictly as demonstration and local
+# testing bootstrap data. In an enterprise production deployment, vendor identity
+# verification must query an authoritative ERP/Procurement system (e.g. SAP,
+# Coupa, Workday, or a secured DynamoDB vendor master table with KMS encryption).
+# Matches against this demo table require independent corroboration (Tax ID / domain)
+# and do not grant unconditional production clearance.
+# ==============================================================================
+DEMO_SAMPLE_REGISTRY_NOTICE = (
+    "DEMO_DATA_ONLY: In-memory registry is a demonstration bootstrap dataset, "
+    "not authoritative production procurement verification."
+)
+
 SAMPLE_VENDORS = [
     {
         "vendor_id": "VEND-AWS-001",
@@ -35,7 +50,8 @@ SAMPLE_VENDORS = [
         ],
         "tax_id": "LU26375245",
         "trusted": True,
-        "domain": "aws.amazon.com"
+        "domain": "aws.amazon.com",
+        "registry_source": "demo_sample_registry"
     },
     {
         "vendor_id": "VEND-GH-002",
@@ -47,7 +63,8 @@ SAMPLE_VENDORS = [
         ],
         "tax_id": "US94320984",
         "trusted": True,
-        "domain": "github.com"
+        "domain": "github.com",
+        "registry_source": "demo_sample_registry"
     },
     {
         "vendor_id": "VEND-DD-003",
@@ -59,7 +76,8 @@ SAMPLE_VENDORS = [
         ],
         "tax_id": "US82930219",
         "trusted": True,
-        "domain": "datadoghq.com"
+        "domain": "datadoghq.com",
+        "registry_source": "demo_sample_registry"
     },
     {
         "vendor_id": "VEND-APX-004",
@@ -71,7 +89,8 @@ SAMPLE_VENDORS = [
         ],
         "tax_id": "KY09283710",
         "trusted": False,
-        "domain": "apex-offshore-shell.ky"
+        "domain": "apex-offshore-shell.ky",
+        "registry_source": "demo_sample_registry"
     },
     {
         "vendor_id": "VEND-SHD-005",
@@ -82,7 +101,8 @@ SAMPLE_VENDORS = [
         ],
         "tax_id": "XX00000000",
         "trusted": False,
-        "domain": "unverified-unknown.net"
+        "domain": "unverified-unknown.net",
+        "registry_source": "demo_sample_registry"
     }
 ]
 
@@ -109,12 +129,17 @@ def normalize_domain(domain: str) -> str:
 
 def verify_vendor_against_registry(extracted_vendor: str, extracted_tax_id: str = None, extracted_domain: str = None) -> dict:
     """
-    Strict, exact, independently verified vendor identity matching.
-    Eliminates substring spoofing vulnerabilities (e.g. 'AWS Scam LLC' or 'github.com.attacker.com').
-    Requires:
+    Strict, exact, independently corroborated vendor identity matching.
+    Eliminates substring spoofing and uncorroborated name claims:
     1. Exact normalized name/alias equality against the server-side registry (NO substring matches).
-    2. Independent verification: If Tax ID is present, it MUST match the registered record.
-       Any mismatch in Tax ID is treated as an active impersonation/spoofing attempt.
+    2. Independent corroboration requirement: Merely printing a registered name on an invoice
+       does NOT grant trust. Independent corroboration (matching Tax ID / VAT ID or verified
+       vendor domain) is MANDATORY to establish trust. An invoice using an exact registered name
+       without independent corroboration fails trust and is routed to manual review.
+    3. Impersonation detection: If an extracted Tax ID or domain conflicts with the registered record,
+       it is treated as an active spoofing attempt (fails closed with tax_id_mismatch=True).
+    4. Demo Data Notice: Local SAMPLE_VENDORS is treated as demo bootstrap data, not authoritative
+       production ERP verification.
     """
     norm_vendor = normalize_vendor_identity(extracted_vendor)
     norm_tax = normalize_tax_id(extracted_tax_id)
@@ -124,8 +149,12 @@ def verify_vendor_against_registry(extracted_vendor: str, extracted_tax_id: str 
         return {
             "matched": False,
             "trusted": False,
+            "independent_verified": False,
+            "requires_manual_review": True,
             "vendor_name": extracted_vendor or "Unknown Vendor",
-            "reason": "Missing or empty vendor name"
+            "reason": "Missing or empty vendor name",
+            "registry_source": "demo_sample_registry",
+            "demo_data_notice": DEMO_SAMPLE_REGISTRY_NOTICE
         }
 
     # 1. Exact match against registered vendor names and explicit aliases
@@ -142,8 +171,12 @@ def verify_vendor_against_registry(extracted_vendor: str, extracted_tax_id: str 
         return {
             "matched": False,
             "trusted": False,
+            "independent_verified": False,
+            "requires_manual_review": True,
             "vendor_name": extracted_vendor,
-            "reason": f"Vendor '{extracted_vendor}' does not match any registered enterprise vendor identity"
+            "reason": f"Vendor '{extracted_vendor}' does not match any registered enterprise vendor identity",
+            "registry_source": "demo_sample_registry",
+            "demo_data_notice": DEMO_SAMPLE_REGISTRY_NOTICE
         }
 
     # 2. Independent identity validation (Tax ID and Domain)
@@ -171,30 +204,60 @@ def verify_vendor_against_registry(extracted_vendor: str, extracted_tax_id: str 
             identity_mismatch = True
             mismatch_details.append(f"Domain mismatch: provided '{norm_dom}' vs registered '{reg_dom}'")
 
-    # If an identity mismatch was detected, strictly fail closed (impersonation attempt)
+    # If an identity mismatch was detected, strictly fail closed (active impersonation attempt)
     if identity_mismatch:
         return {
             "matched": False,
             "trusted": False,
+            "independent_verified": False,
+            "requires_manual_review": True,
             "vendor_name": matched_entry["name"],
             "vendor_id": matched_entry.get("vendor_id"),
             "tax_id": reg_tax,
             "tax_id_mismatch": True,
-            "reason": "; ".join(mismatch_details)
+            "reason": "; ".join(mismatch_details),
+            "registry_source": "demo_sample_registry",
+            "demo_data_notice": DEMO_SAMPLE_REGISTRY_NOTICE
         }
 
-    is_trusted = bool(matched_entry.get("trusted", False))
-    independent_verified = tax_id_verified or domain_verified or bool(norm_tax and norm_tax == reg_tax)
+    # Independent corroboration: An invoice claiming an enterprise vendor must independently
+    # provide either a matching Tax ID or a matching domain. Name alone is NOT sufficient.
+    independent_verified = bool(tax_id_verified or domain_verified)
+
+    # Trust requires BOTH:
+    # 1. Registered entity is trusted in registry
+    # 2. Strong independent corroboration was confirmed on the document
+    is_trusted = bool(matched_entry.get("trusted", False)) and independent_verified
+
+    corroboration_notes = []
+    if tax_id_verified:
+        corroboration_notes.append(f"Tax ID '{reg_tax}' verified")
+    if domain_verified:
+        corroboration_notes.append(f"Domain '{reg_dom}' verified")
+
+    if not independent_verified:
+        reason = (
+            f"Vendor name '{extracted_vendor}' matched demo registry (ID: {matched_entry.get('vendor_id')}), "
+            "but lacks independent corroboration (valid Tax ID or domain proof required for trust; routed to manual review)"
+        )
+    else:
+        reason = (
+            f"Exact match and independent corroboration verified in demo registry "
+            f"(ID: {matched_entry.get('vendor_id')}; {', '.join(corroboration_notes)})"
+        )
 
     return {
         "matched": True,
         "trusted": is_trusted,
-        "independent_verified": independent_verified or is_trusted,
+        "independent_verified": independent_verified,
+        "requires_manual_review": not independent_verified,
         "vendor_name": matched_entry["name"],
         "vendor_id": matched_entry.get("vendor_id"),
-        "tax_id": reg_tax if reg_tax else norm_tax,
-        "domain": reg_dom,
-        "reason": f"Exact match verified in server-side registry (ID: {matched_entry.get('vendor_id')})"
+        "tax_id": norm_tax if norm_tax else reg_tax,
+        "domain": norm_dom if norm_dom else reg_dom,
+        "registry_source": "demo_sample_registry",
+        "demo_data_notice": DEMO_SAMPLE_REGISTRY_NOTICE,
+        "reason": reason
     }
 
 try:
@@ -328,6 +391,9 @@ def extract_with_bedrock(content_bytes: bytes, filename: str, document_id: str):
             parsed["vendor_trusted"] = verification["trusted"]
             parsed["vendor_registry_match"] = verification["matched"]
             parsed["vendor_identity_verified"] = verification.get("independent_verified", False)
+            parsed["requires_manual_review"] = verification.get("requires_manual_review", False)
+            parsed["registry_source"] = verification.get("registry_source", "demo_sample_registry")
+            parsed["demo_data_notice"] = verification.get("demo_data_notice", DEMO_SAMPLE_REGISTRY_NOTICE)
             if verification.get("tax_id_mismatch"):
                 parsed["tax_id_mismatch"] = True
             if verification.get("tax_id"):
@@ -484,7 +550,10 @@ def parse_document_content_rules(content_bytes: bytes, filename: str, document_i
         "trusted": verification["trusted"],
         "registry_match": verification["matched"],
         "identity_verified": verification.get("independent_verified", False),
-        "tax_id_mismatch": verification.get("tax_id_mismatch", False)
+        "tax_id_mismatch": verification.get("tax_id_mismatch", False),
+        "requires_manual_review": verification.get("requires_manual_review", False),
+        "registry_source": verification.get("registry_source", "demo_sample_registry"),
+        "demo_data_notice": verification.get("demo_data_notice", DEMO_SAMPLE_REGISTRY_NOTICE)
     }
 
     today = datetime.date.today()
@@ -501,6 +570,9 @@ def parse_document_content_rules(content_bytes: bytes, filename: str, document_i
             "vendor_identity_verified": matched_vendor.get("identity_verified", False),
             "vendor_domain": matched_vendor["domain"],
             "tax_id_mismatch": matched_vendor.get("tax_id_mismatch", False),
+            "requires_manual_review": matched_vendor.get("requires_manual_review", False),
+            "registry_source": matched_vendor.get("registry_source", "demo_sample_registry"),
+            "demo_data_notice": matched_vendor.get("demo_data_notice", DEMO_SAMPLE_REGISTRY_NOTICE),
             "currency": "USD",
             "subtotal": 0.0,
             "tax_rate": 0.0,
@@ -533,6 +605,9 @@ def parse_document_content_rules(content_bytes: bytes, filename: str, document_i
         "vendor_identity_verified": matched_vendor.get("identity_verified", False),
         "vendor_domain": matched_vendor["domain"],
         "tax_id_mismatch": matched_vendor.get("tax_id_mismatch", False),
+        "requires_manual_review": matched_vendor.get("requires_manual_review", False),
+        "registry_source": matched_vendor.get("registry_source", "demo_sample_registry"),
+        "demo_data_notice": matched_vendor.get("demo_data_notice", DEMO_SAMPLE_REGISTRY_NOTICE),
         "currency": "USD",
         "subtotal": round(extracted_amount, 2),
         "tax_rate": tax_rate,
