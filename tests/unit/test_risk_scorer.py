@@ -101,6 +101,45 @@ class TestRiskScorer(unittest.TestCase):
             self.assertIn("Untrusted or unregistered offshore entity", " ".join(result["risk"]["factors"]))
             self.assertGreaterEqual(result["risk"]["score"], 50)
 
+    def test_tax_id_mismatch_triggers_critical_identity_spoofing_risk(self):
+        """Verifies tax_id_mismatch flag adds critical +65 penalty and flags for manual review."""
+        event = {
+            "document_id": "doc-spoof-attempt",
+            "extracted_data": {
+                "vendor": "Amazon Web Services EMEA",
+                "vendor_trusted": False,
+                "vendor_registry_match": False,
+                "tax_id_mismatch": True,
+                "grand_total": 500.0  # Even for small amounts, spoofing must block auto-approval
+            },
+            "security_scan": {"format_whitelisted": True, "size_within_limits": True}
+        }
+        with patch.object(risk_scorer_app, 'table'):
+            result = risk_scorer_app.lambda_handler(event, None)
+            risk = result["risk"]
+            self.assertGreaterEqual(risk["score"], 70)
+            self.assertEqual(risk["level"], "HIGH")
+            self.assertEqual(risk["recommendation"], "FLAG_FOR_MANUAL_REVIEW")
+            self.assertTrue(any("Identity Spoofing Detected" in f for f in risk["factors"]))
+
+    def test_substring_vendor_name_rejected_by_exact_trusted_set(self):
+        """Verifies substring containing trusted name ('AWS Hacker Org') is rejected by exact trusted set."""
+        event = {
+            "document_id": "doc-substring-spoof",
+            "extracted_data": {
+                "vendor": "AWS Phishing Service Inc",
+                "vendor_trusted": True,  # Attacker injected True into payload
+                "grand_total": 100.0
+            },
+            "security_scan": {"format_whitelisted": True, "size_within_limits": True}
+        }
+        with patch.object(risk_scorer_app, 'table'):
+            result = risk_scorer_app.lambda_handler(event, None)
+            risk = result["risk"]
+            # Must be penalized +45 for untrusted entity despite vendor_trusted: True
+            self.assertGreaterEqual(risk["score"], 50)
+            self.assertTrue(any("Untrusted or unregistered offshore entity" in f for f in risk["factors"]))
+
     def test_review_handler_waitForTaskToken(self):
         event = {
             "document_id": "doc-test-3333",

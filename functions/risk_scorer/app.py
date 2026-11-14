@@ -1,6 +1,7 @@
 import json
 import os
 import datetime
+import re
 from decimal import Decimal
 import boto3
 
@@ -16,6 +17,27 @@ except Exception:
 dynamodb = boto3.resource('dynamodb')
 TABLE_NAME = os.environ.get('TABLE_NAME', 'DocuFlowRecords')
 table = dynamodb.Table(TABLE_NAME)
+
+def normalize_vendor_identity(val: str) -> str:
+    """Normalizes vendor names for strict exact-equality matching."""
+    if not val:
+        return ""
+    return re.sub(r'[^a-zA-Z0-9]+', ' ', str(val).lower()).strip()
+
+# Strict list of canonical trusted vendor identities - NO substring matches permitted
+EXACT_TRUSTED_VENDORS = {
+    "amazon web services emea sarl",
+    "amazon web services emea",
+    "amazon web services",
+    "aws emea",
+    "aws",
+    "github inc microsoft",
+    "github inc",
+    "github",
+    "datadog cloud monitoring",
+    "datadog inc",
+    "datadog"
+}
 
 try:
     from utils import decimal_serialize
@@ -37,22 +59,41 @@ def calculate_anomaly_risk(extracted_data: dict, security_scan: dict = None) -> 
     risk_factors = []
 
     vendor = extracted_data.get("vendor", "")
-    # Fail closed on trust: model cannot grant trust unilaterally.
-    # Require server-side registry match or verification against known trusted enterprise registry.
-    trusted_registry = {"amazon web services", "aws", "github", "datadog", "microsoft"}
-    is_known_trusted = any(t in vendor.lower() for t in trusted_registry)
+    norm_vendor = normalize_vendor_identity(vendor)
+    has_exact_trusted_match = norm_vendor in EXACT_TRUSTED_VENDORS
+    registry_matched = bool(extracted_data.get("vendor_registry_match", False))
+    vendor_declared_trusted = bool(extracted_data.get("vendor_trusted", False))
+    tax_id_mismatch = bool(extracted_data.get("tax_id_mismatch", False))
 
+    # Strict Fail-Closed Verification:
+    # A vendor is ONLY trusted if:
+    # 1. No identity or Tax ID mismatch was detected.
+    # 2. It has an exact normalized match against the trusted registry (NO substring matching).
+    # 3. If registry match metadata is provided, it must be verified True.
     if "vendor_registry_match" in extracted_data:
-        vendor_trusted = bool(extracted_data.get("vendor_trusted", False) and extracted_data.get("vendor_registry_match", False))
+        vendor_trusted = bool(
+            vendor_declared_trusted and 
+            registry_matched and 
+            has_exact_trusted_match and 
+            not tax_id_mismatch
+        )
     else:
-        vendor_trusted = bool(extracted_data.get("vendor_trusted", False) and is_known_trusted)
+        vendor_trusted = bool(
+            vendor_declared_trusted and 
+            has_exact_trusted_match and 
+            not tax_id_mismatch
+        )
+
     grand_total = float(extracted_data.get("grand_total", 0.0))
 
     if extracted_data.get("extraction_status") == "EXTRACTION_FAILED":
         risk_score += 60
         risk_factors.append("Automated document extraction failed or unavailable - manual review required (+60)")
 
-    if not vendor_trusted:
+    if tax_id_mismatch:
+        risk_score += 65
+        risk_factors.append(f"CRITICAL: Identity Spoofing Detected! Tax ID on document does not match verified registry record for '{vendor}' (+65)")
+    elif not vendor_trusted:
         risk_score += 45
         risk_factors.append(f"Untrusted or unregistered offshore entity: '{vendor}' (+45)")
     else:

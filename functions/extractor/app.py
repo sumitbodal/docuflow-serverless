@@ -23,12 +23,179 @@ BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'amazon.nova-lite-v1:0')
 table = dynamodb.Table(TABLE_NAME)
 
 SAMPLE_VENDORS = [
-    {"name": "Amazon Web Services EMEA", "tax_id": "LU26375245", "trusted": True, "domain": "aws.amazon.com"},
-    {"name": "GitHub Inc (Microsoft)", "tax_id": "US94320984", "trusted": True, "domain": "github.com"},
-    {"name": "Datadog Cloud Monitoring", "tax_id": "US82930219", "trusted": True, "domain": "datadoghq.com"},
-    {"name": "Apex Global Consultancy Offshore Ltd", "tax_id": "KY09283710", "trusted": False, "domain": "apex-offshore-shell.ky"},
-    {"name": "Unregistered Shadow Vendor Ltd", "tax_id": "XX00000000", "trusted": False, "domain": "unverified-unknown.net"}
+    {
+        "vendor_id": "VEND-AWS-001",
+        "name": "Amazon Web Services EMEA",
+        "aliases": [
+            "amazon web services emea sarl",
+            "amazon web services emea",
+            "amazon web services",
+            "aws emea",
+            "aws"
+        ],
+        "tax_id": "LU26375245",
+        "trusted": True,
+        "domain": "aws.amazon.com"
+    },
+    {
+        "vendor_id": "VEND-GH-002",
+        "name": "GitHub Inc (Microsoft)",
+        "aliases": [
+            "github inc microsoft",
+            "github inc",
+            "github"
+        ],
+        "tax_id": "US94320984",
+        "trusted": True,
+        "domain": "github.com"
+    },
+    {
+        "vendor_id": "VEND-DD-003",
+        "name": "Datadog Cloud Monitoring",
+        "aliases": [
+            "datadog cloud monitoring",
+            "datadog inc",
+            "datadog"
+        ],
+        "tax_id": "US82930219",
+        "trusted": True,
+        "domain": "datadoghq.com"
+    },
+    {
+        "vendor_id": "VEND-APX-004",
+        "name": "Apex Global Consultancy Offshore Ltd",
+        "aliases": [
+            "apex global consultancy offshore ltd",
+            "apex global consultancy offshore",
+            "apex global consultancy"
+        ],
+        "tax_id": "KY09283710",
+        "trusted": False,
+        "domain": "apex-offshore-shell.ky"
+    },
+    {
+        "vendor_id": "VEND-SHD-005",
+        "name": "Unregistered Shadow Vendor Ltd",
+        "aliases": [
+            "unregistered shadow vendor ltd",
+            "shadow vendor"
+        ],
+        "tax_id": "XX00000000",
+        "trusted": False,
+        "domain": "unverified-unknown.net"
+    }
 ]
+
+def normalize_vendor_identity(val: str) -> str:
+    """Normalizes vendor names for strict exact-equality matching."""
+    if not val:
+        return ""
+    # Lowercase, replace non-alphanumeric chars with single space, strip
+    return re.sub(r'[^a-zA-Z0-9]+', ' ', str(val).lower()).strip()
+
+def normalize_tax_id(tax_id: str) -> str:
+    """Normalizes Tax/VAT IDs by stripping non-alphanumeric characters."""
+    if not tax_id:
+        return ""
+    return re.sub(r'[^A-Z0-9]', '', str(tax_id).upper()).strip()
+
+def normalize_domain(domain: str) -> str:
+    """Extracts the exact hostname from a URL/domain string."""
+    if not domain:
+        return ""
+    cleaned = str(domain).strip().lower()
+    cleaned = re.sub(r'^https?://', '', cleaned).split('/')[0].split(':')[0]
+    return cleaned
+
+def verify_vendor_against_registry(extracted_vendor: str, extracted_tax_id: str = None, extracted_domain: str = None) -> dict:
+    """
+    Strict, exact, independently verified vendor identity matching.
+    Eliminates substring spoofing vulnerabilities (e.g. 'AWS Scam LLC' or 'github.com.attacker.com').
+    Requires:
+    1. Exact normalized name/alias equality against the server-side registry (NO substring matches).
+    2. Independent verification: If Tax ID is present, it MUST match the registered record.
+       Any mismatch in Tax ID is treated as an active impersonation/spoofing attempt.
+    """
+    norm_vendor = normalize_vendor_identity(extracted_vendor)
+    norm_tax = normalize_tax_id(extracted_tax_id)
+    norm_dom = normalize_domain(extracted_domain)
+
+    if not norm_vendor:
+        return {
+            "matched": False,
+            "trusted": False,
+            "vendor_name": extracted_vendor or "Unknown Vendor",
+            "reason": "Missing or empty vendor name"
+        }
+
+    # 1. Exact match against registered vendor names and explicit aliases
+    matched_entry = None
+    for reg_v in SAMPLE_VENDORS:
+        candidate_names = [normalize_vendor_identity(reg_v["name"])]
+        candidate_names.extend([normalize_vendor_identity(a) for a in reg_v.get("aliases", [])])
+        # STRICT EXACT EQUALITY MATCH ONLY - NEVER SUBSTRING
+        if norm_vendor in candidate_names:
+            matched_entry = reg_v
+            break
+
+    if not matched_entry:
+        return {
+            "matched": False,
+            "trusted": False,
+            "vendor_name": extracted_vendor,
+            "reason": f"Vendor '{extracted_vendor}' does not match any registered enterprise vendor identity"
+        }
+
+    # 2. Independent identity validation (Tax ID and Domain)
+    reg_tax = normalize_tax_id(matched_entry.get("tax_id"))
+    reg_dom = normalize_domain(matched_entry.get("domain"))
+
+    tax_id_verified = False
+    domain_verified = False
+    identity_mismatch = False
+    mismatch_details = []
+
+    # If document provided a Tax ID, verify exact match
+    if norm_tax:
+        if norm_tax == reg_tax:
+            tax_id_verified = True
+        else:
+            identity_mismatch = True
+            mismatch_details.append(f"Tax ID mismatch: provided '{norm_tax}' vs registered '{reg_tax}'")
+
+    # If document provided a domain, verify exact match
+    if norm_dom:
+        if norm_dom == reg_dom:
+            domain_verified = True
+        else:
+            identity_mismatch = True
+            mismatch_details.append(f"Domain mismatch: provided '{norm_dom}' vs registered '{reg_dom}'")
+
+    # If an identity mismatch was detected, strictly fail closed (impersonation attempt)
+    if identity_mismatch:
+        return {
+            "matched": False,
+            "trusted": False,
+            "vendor_name": matched_entry["name"],
+            "vendor_id": matched_entry.get("vendor_id"),
+            "tax_id": reg_tax,
+            "tax_id_mismatch": True,
+            "reason": "; ".join(mismatch_details)
+        }
+
+    is_trusted = bool(matched_entry.get("trusted", False))
+    independent_verified = tax_id_verified or domain_verified or bool(norm_tax and norm_tax == reg_tax)
+
+    return {
+        "matched": True,
+        "trusted": is_trusted,
+        "independent_verified": independent_verified or is_trusted,
+        "vendor_name": matched_entry["name"],
+        "vendor_id": matched_entry.get("vendor_id"),
+        "tax_id": reg_tax if reg_tax else norm_tax,
+        "domain": reg_dom,
+        "reason": f"Exact match verified in server-side registry (ID: {matched_entry.get('vendor_id')})"
+    }
 
 try:
     from utils import decimal_serialize, parse_dynamo_payload
@@ -150,23 +317,27 @@ def extract_with_bedrock(content_bytes: bytes, filename: str, document_id: str):
             if "tax_amount" in parsed: parsed["tax_amount"] = round(float(parsed["tax_amount"]), 2)
             if "grand_total" in parsed: parsed["grand_total"] = round(float(parsed["grand_total"]), 2)
 
-            # Enforce server-side enterprise vendor verification
-            # Model response is untrusted: verify vendor against server-side registry
+            # Enforce server-side enterprise vendor verification using exact independent identity matching
+            # Model response is untrusted: verify vendor against server-side registry (NO substring matching)
             vendor_raw = str(parsed.get("vendor", "")).strip()
-            verified_vendor = None
-            for reg_v in SAMPLE_VENDORS:
-                if reg_v["name"].lower() in vendor_raw.lower() or reg_v["domain"].lower() in vendor_raw.lower():
-                    verified_vendor = reg_v
-                    break
+            tax_id_raw = str(parsed.get("tax_id", "")).strip()
+            domain_raw = str(parsed.get("vendor_domain", "")).strip()
 
-            if verified_vendor:
-                parsed["vendor_trusted"] = bool(verified_vendor.get("trusted", False))
-                parsed["vendor_registry_match"] = True
-                parsed["tax_id"] = verified_vendor.get("tax_id", parsed.get("tax_id"))
-            else:
-                # Untrusted / unregistered vendor: never allow model to grant trust unilaterally
-                parsed["vendor_trusted"] = False
-                parsed["vendor_registry_match"] = False
+            verification = verify_vendor_against_registry(vendor_raw, tax_id_raw, domain_raw)
+
+            parsed["vendor_trusted"] = verification["trusted"]
+            parsed["vendor_registry_match"] = verification["matched"]
+            parsed["vendor_identity_verified"] = verification.get("independent_verified", False)
+            if verification.get("tax_id_mismatch"):
+                parsed["tax_id_mismatch"] = True
+            if verification.get("tax_id"):
+                parsed["tax_id"] = verification["tax_id"]
+            if verification.get("domain") and not parsed.get("vendor_domain"):
+                parsed["vendor_domain"] = verification["domain"]
+            if verification.get("vendor_name") and not parsed.get("vendor"):
+                parsed["vendor"] = verification["vendor_name"]
+            if verification.get("vendor_name"):
+                parsed["vendor_canonical_name"] = verification["vendor_name"]
 
             if subsegment:
                 try:
@@ -270,21 +441,51 @@ def parse_document_content_rules(content_bytes: bytes, filename: str, document_i
         if fallback_m:
             extracted_inv_num = fallback_m[0].upper()
 
-    # 3. Match vendor entity against registry
-    matched_vendor = None
-    for vendor in SAMPLE_VENDORS:
-        if vendor["name"].lower() in text_content.lower() or vendor["domain"].lower() in text_content.lower():
-            matched_vendor = vendor
+    # 3. Match vendor entity against registry using line extraction and exact-equality verification
+    extracted_vendor_raw = None
+    for line in text_content.splitlines():
+        line_clean = line.strip()
+        vm = re.match(r'^(?:vendor|from|company|biller|service\s*provider)[\s:]+(.+)$', line_clean, re.IGNORECASE)
+        if vm:
+            extracted_vendor_raw = vm.group(1).strip()
             break
 
-    # If vendor is not in known registry, do NOT guess or synthesize from document_id
-    if not matched_vendor:
-        matched_vendor = {
-            "name": "Unknown / Unregistered Vendor",
-            "tax_id": "UNREGISTERED",
-            "domain": "unknown",
-            "trusted": False
-        }
+    if not extracted_vendor_raw:
+        for line in text_content.splitlines()[:8]:
+            line_clean = line.strip()
+            if not line_clean or line_clean.upper() in ("INVOICE", "TAX INVOICE", "BILLING STATEMENT", "STATEMENT", "RECEIPT"):
+                continue
+            norm_line = normalize_vendor_identity(line_clean)
+            for reg_v in SAMPLE_VENDORS:
+                candidates = [normalize_vendor_identity(reg_v["name"])] + [normalize_vendor_identity(a) for a in reg_v.get("aliases", [])]
+                if norm_line in candidates:
+                    extracted_vendor_raw = reg_v["name"]
+                    break
+            if extracted_vendor_raw:
+                break
+
+    # Search for tax ID in text
+    extracted_tax_id = None
+    tax_m = re.findall(r'(?:tax\s*id|vat\s*(?:no\.?|id|#)?|ein)[\s:]*([A-Za-z0-9\-]+)', text_content, re.IGNORECASE)
+    if tax_m:
+        extracted_tax_id = tax_m[0].strip()
+
+    # Search for domain in text
+    extracted_domain = None
+    dom_m = re.findall(r'(?:https?://)?([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', text_content)
+    if dom_m:
+        extracted_domain = dom_m[0].strip()
+
+    verification = verify_vendor_against_registry(extracted_vendor_raw, extracted_tax_id, extracted_domain)
+    matched_vendor = {
+        "name": verification.get("vendor_name") or extracted_vendor_raw or "Unknown / Unregistered Vendor",
+        "tax_id": verification.get("tax_id") or "UNREGISTERED",
+        "domain": verification.get("domain") or "unknown",
+        "trusted": verification["trusted"],
+        "registry_match": verification["matched"],
+        "identity_verified": verification.get("independent_verified", False),
+        "tax_id_mismatch": verification.get("tax_id_mismatch", False)
+    }
 
     today = datetime.date.today()
     due_date = today + datetime.timedelta(days=30)
@@ -296,7 +497,10 @@ def parse_document_content_rules(content_bytes: bytes, filename: str, document_i
             "vendor": matched_vendor["name"],
             "tax_id": matched_vendor["tax_id"],
             "vendor_trusted": matched_vendor["trusted"],
+            "vendor_registry_match": matched_vendor.get("registry_match", False),
+            "vendor_identity_verified": matched_vendor.get("identity_verified", False),
             "vendor_domain": matched_vendor["domain"],
+            "tax_id_mismatch": matched_vendor.get("tax_id_mismatch", False),
             "currency": "USD",
             "subtotal": 0.0,
             "tax_rate": 0.0,
@@ -325,8 +529,10 @@ def parse_document_content_rules(content_bytes: bytes, filename: str, document_i
         "vendor": matched_vendor["name"],
         "tax_id": matched_vendor["tax_id"],
         "vendor_trusted": matched_vendor["trusted"],
-        "vendor_registry_match": matched_vendor.get("trusted", False),
+        "vendor_registry_match": matched_vendor.get("registry_match", False),
+        "vendor_identity_verified": matched_vendor.get("identity_verified", False),
         "vendor_domain": matched_vendor["domain"],
+        "tax_id_mismatch": matched_vendor.get("tax_id_mismatch", False),
         "currency": "USD",
         "subtotal": round(extracted_amount, 2),
         "tax_rate": tax_rate,

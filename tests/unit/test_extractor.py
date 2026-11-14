@@ -251,6 +251,77 @@ class TestExtractor(unittest.TestCase):
             extractor_app.lambda_handler(event, None)
         self.assertIn("Missing required S3 coordinates", str(ctx.exception))
 
+    def test_substring_vendor_spoofing_rejected(self):
+        """Verifies substring matching is rejected: 'AWS Phishing Scam LLC' must not match AWS."""
+        sample_invoice_text = (
+            "INVOICE\n"
+            "Vendor: AWS Phishing Scam LLC\n"
+            "Invoice Number: INV-FAKE-999\n"
+            "Total Amount: $500.00\n"
+        ).encode('utf-8')
+
+        event = {
+            "document_id": "doc-spoof-1",
+            "filename": "fake_aws.pdf",
+            "s3_bucket": "test-bucket",
+            "s3_key": "uploads/doc-spoof-1/fake_aws.pdf"
+        }
+        with patch.object(extractor_app, 'table'):
+            with patch.object(extractor_app, 's3_client') as mock_s3:
+                mock_s3.get_object.return_value = {"Body": BytesIO(sample_invoice_text)}
+                with patch.object(extractor_app, 'bedrock_runtime') as mock_bedrock:
+                    mock_bedrock.converse.side_effect = Exception("BedrockUnavailable")
+                    result = extractor_app.lambda_handler(event, None)
+                    data = result["extracted_data"]
+                    self.assertFalse(data["vendor_trusted"])
+                    self.assertFalse(data["vendor_registry_match"])
+                    self.assertNotEqual(data["tax_id"], "LU26375245")
+
+    def test_tax_id_mismatch_detected_and_fails_closed(self):
+        """Verifies independent identity verification: mismatched Tax ID fails closed as spoofing."""
+        sample_invoice_text = (
+            "INVOICE\n"
+            "Vendor: Amazon Web Services EMEA\n"
+            "Tax ID: KY99999999\n"
+            "Invoice Number: INV-IMPOSTOR-1\n"
+            "Total: $1,200.00\n"
+        ).encode('utf-8')
+
+        event = {
+            "document_id": "doc-spoof-tax",
+            "filename": "tax_mismatch.pdf",
+            "s3_bucket": "test-bucket",
+            "s3_key": "uploads/doc-spoof-tax/tax_mismatch.pdf"
+        }
+        with patch.object(extractor_app, 'table'):
+            with patch.object(extractor_app, 's3_client') as mock_s3:
+                mock_s3.get_object.return_value = {"Body": BytesIO(sample_invoice_text)}
+                with patch.object(extractor_app, 'bedrock_runtime') as mock_bedrock:
+                    mock_bedrock.converse.side_effect = Exception("BedrockUnavailable")
+                    result = extractor_app.lambda_handler(event, None)
+                    data = result["extracted_data"]
+                    self.assertFalse(data["vendor_trusted"])
+                    self.assertFalse(data["vendor_registry_match"])
+                    self.assertTrue(data.get("tax_id_mismatch"))
+
+    def test_verify_vendor_against_registry_strictness(self):
+        """Direct test of verify_vendor_against_registry for exact matching and domain checks."""
+        # Exact match
+        ok_match = extractor_app.verify_vendor_against_registry("Amazon Web Services EMEA", "LU26375245", "aws.amazon.com")
+        self.assertTrue(ok_match["matched"])
+        self.assertTrue(ok_match["trusted"])
+        self.assertTrue(ok_match["independent_verified"])
+
+        # Substring attempt
+        sub_match = extractor_app.verify_vendor_against_registry("AWS Security LLC")
+        self.assertFalse(sub_match["matched"])
+        self.assertFalse(sub_match["trusted"])
+
+        # Domain spoof attempt (e.g. attacker domain claiming to be Datadog)
+        domain_spoof = extractor_app.verify_vendor_against_registry("Datadog", "US82930219", "datadog.attacker.com")
+        self.assertFalse(domain_spoof["matched"])
+        self.assertTrue(domain_spoof.get("tax_id_mismatch"))
+
     def test_extractor_fails_closed_when_dynamo_errors(self):
         """Verifies extractor raises RuntimeError if DynamoDB update fails."""
         event = {
