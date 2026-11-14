@@ -18,6 +18,9 @@
 - **API Gateway Base URL**: `https://z9okxb9r8j.execute-api.us-east-1.amazonaws.com`
 - **AWS Region**: `us-east-1` (US East, N. Virginia)
 - **Cognito User Pool ID**: `us-east-1_sO92E2WYK` (Client ID: `7a4ohh6j10s38a4cio8frddanr`)
+- **Reviewer Demo Credentials** *(for testing authenticated Cognito Reviewer role)*:
+  - **Email / Username**: `reviewer.demo@example.com` (or `reviewer_demo`)
+  - **Password**: `DocuFlowReviewer2026!`
 
 ---
 
@@ -130,9 +133,12 @@ Visit: **[http://docuflow-frontend-986523046664-us-east-1-an.s3-website-us-east-
 
 ### 2. Sign In as a Verified Reviewer
 1. In the top bar, click **⚙️ Connect & Sign In**.
-2. Enter your authorized Reviewer credentials.
+2. Enter the demo Reviewer credentials:
+   - **Reviewer Email**: `reviewer.demo@example.com` (or username `reviewer_demo`)
+   - **Password**: `DocuFlowReviewer2026!`
 3. Click **Sign In with Cognito**.
-4. Confirm the top header displays your email and the green **`Reviewer`** badge.
+4. Confirm the top header displays `reviewer.demo@example.com` and the green **`Reviewer`** badge.
+*(Note: You can also explore all features without signing in using the interactive quick simulation presets!)*
 
 ### 3. Scenario 1: Automated Low-Risk Ingestion (Auto-Approval)
 1. In the **Document Ingestion** panel, click **`☁️ AWS Cloud Invoice ($1,420.50 — Verified Vendor)`** or upload a valid PDF invoice.
