@@ -655,6 +655,16 @@ def lambda_handler(event, context):
             return raw_parts[-1]
         return ""
 
+    if route_key in ["GET /", "GET /api", "ANY /{proxy+}"] and (raw_path == "/" or raw_path == ""):
+        return {
+            "statusCode": 302,
+            "headers": {
+                "Location": "http://docuflow-frontend-986523046664-us-east-1-an.s3-website-us-east-1.amazonaws.com/",
+                "Access-Control-Allow-Origin": "*"
+            },
+            "body": ""
+        }
+
     if "/api/upload-url" in route_key:
         return handle_get_upload_url(event)
     elif "/api/documents/" in route_key and route_key.endswith("/process"):
