@@ -754,8 +754,8 @@ window.openDetailsModal = function(docId) {
 };
 
 window.reviewDocument = async function(docId, action) {
-  // If the document is only a client-side preset/simulation, update it locally without hitting the real backend
-  const isDemoOrLocal = !API_AUTH_TOKEN || docId.startsWith("doc-") || docId.length < 20;
+  // If the document is one of the initial client presets or starts with doc-, treat it as a demo/simulation
+  const isDemoOrLocal = docId === "3e4f5a6b-9988-7766-5544-33221100ffaa" || docId.startsWith("doc-") || !API_AUTH_TOKEN;
 
   if (API_BASE_URL && !isDemoOrLocal) {
     try {
