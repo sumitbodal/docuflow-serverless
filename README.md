@@ -10,11 +10,17 @@
 [![S3](https://img.shields.io/badge/Amazon-S3-green?logo=amazons3)](https://aws.amazon.com/s3/)
 [![Demo Video](https://img.shields.io/badge/YouTube-Demo%20Video-red?logo=youtube)](https://youtu.be/VcrpZomKbzw)
 [![Tests](https://img.shields.io/badge/Unit_Tests-75%20Passed-success)](https://github.com/)
+[![AWS Builder Center](https://img.shields.io/badge/AWS%20Builder%20Center-Official%20Project-232f3e?logo=amazon-aws)](https://builder.aws.com/project/3MBwpeIFkgSbivMetrrSPxieOnj/docuflow-ai-serverless-multi-modal-document-and-invoice-intelligence-engine)
+
+---
+
+![DocuFlow AI Banner](assets/cover.png)
 
 ---
 
 ## 🌐 Live Cloud Deployment Links & Demo Video
 
+- **🚀 Official AWS Builder Center Project**: [https://builder.aws.com/project/3MBwpeIFkgSbivMetrrSPxieOnj/docuflow-ai-serverless-multi-modal-document-and-invoice-intelligence-engine](https://builder.aws.com/project/3MBwpeIFkgSbivMetrrSPxieOnj/docuflow-ai-serverless-multi-modal-document-and-invoice-intelligence-engine)
 - **🎥 YouTube Video Demo (Walkthrough)**: [https://youtu.be/VcrpZomKbzw](https://youtu.be/VcrpZomKbzw)
 - **Interactive Web Dashboard**: [http://docuflow-frontend-986523046664-us-east-1-an.s3-website-us-east-1.amazonaws.com/](http://docuflow-frontend-986523046664-us-east-1-an.s3-website-us-east-1.amazonaws.com/)
 - **API Gateway Base URL**: `https://z9okxb9r8j.execute-api.us-east-1.amazonaws.com`
